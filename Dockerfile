@@ -18,7 +18,7 @@ RUN apt-get update && apt-get install -y \
 
 # create a non-root user for Hugging Face
 RUN useradd -m -u 1000 user
-RUN chown -r user:user /app
+RUN chown -R user:user /app
 
 # Install Python dependencies
 COPY --chown=user:user requirements.txt .
