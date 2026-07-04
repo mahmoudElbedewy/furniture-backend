@@ -1,8 +1,29 @@
 import time
+import ssl
 import requests
+from requests.adapters import HTTPAdapter
 from django.core.management.base import BaseCommand
 from django.conf import settings
 from telegram_bot.handlers import handle_order_approval, handle_order_rejection
+
+
+class _EOFTolerantAdapter(HTTPAdapter):
+    """
+    يحل مشكلة SSLEOFError (UNEXPECTED_EOF_WHILE_READING) المعروفة بين
+    Python 3.10/3.11 + urllib3 2.x + OpenSSL 3.0، عن طريق تفعيل
+    SSL_OP_IGNORE_UNEXPECTED_EOF على الـ SSL context.
+    """
+
+    def init_poolmanager(self, *args, **kwargs):
+        context = ssl.create_default_context()
+        if hasattr(ssl, "OP_IGNORE_UNEXPECTED_EOF"):
+            context.options |= ssl.OP_IGNORE_UNEXPECTED_EOF
+        kwargs["ssl_context"] = context
+        return super().init_poolmanager(*args, **kwargs)
+
+
+_session = requests.Session()
+_session.mount("https://", _EOFTolerantAdapter())
 
 
 class Command(BaseCommand):
@@ -33,7 +54,7 @@ class Command(BaseCommand):
                 if offset:
                     params["offset"] = offset
 
-                response = requests.get(
+                response = _session.get(
                     f"{base_url}/getUpdates",
                     params=params,
                     headers=headers,
@@ -82,7 +103,7 @@ class Command(BaseCommand):
 
         sender_chat_id = str(callback_query["message"]["chat"]["id"])
         if sender_chat_id != str(settings.TELEGRAM_ADMIN_CHAT_ID):
-            requests.post(
+            _session.post(
                 f"{base_url}/answerCallbackQuery",
                 data={"callback_query_id": callback_id, "text": "غير مصرح"},
                 headers=headers,
@@ -111,14 +132,14 @@ class Command(BaseCommand):
         else:
             result_text = "أمر غير معروف"
 
-        requests.post(
+        _session.post(
             f"{base_url}/answerCallbackQuery",
             data={"callback_query_id": callback_id, "text": result_text},
             headers=headers,
             timeout=post_timeout,
         )
 
-        requests.post(
+        _session.post(
             f"{base_url}/editMessageText",
             data={
                 "chat_id": callback_query["message"]["chat"]["id"],

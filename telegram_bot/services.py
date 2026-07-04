@@ -1,14 +1,32 @@
 import time
+import ssl
 import requests
+from requests.adapters import HTTPAdapter
 from django.conf import settings
 from .models import AdminNotification
 
 
+class _EOFTolerantAdapter(HTTPAdapter):
+    """
+    يحل مشكلة SSLEOFError (UNEXPECTED_EOF_WHILE_READING) المعروفة بين
+    Python 3.10/3.11 + urllib3 2.x + OpenSSL 3.0، عن طريق تفعيل
+    SSL_OP_IGNORE_UNEXPECTED_EOF على الـ SSL context.
+    """
+
+    def init_poolmanager(self, *args, **kwargs):
+        context = ssl.create_default_context()
+        # OP_IGNORE_UNEXPECTED_EOF متاح من Python 3.8+ / OpenSSL 3.0+
+        if hasattr(ssl, "OP_IGNORE_UNEXPECTED_EOF"):
+            context.options |= ssl.OP_IGNORE_UNEXPECTED_EOF
+        kwargs["ssl_context"] = context
+        return super().init_poolmanager(*args, **kwargs)
+
+
+_session = requests.Session()
+_session.mount("https://", _EOFTolerantAdapter())
+
+
 def _telegram_url(method: str) -> str:
-    """
-    بيبني الرابط: لو فيه relay مظبوط بيستخدمه، لو مفيش بيرجع لتليجرام مباشرة
-    (fallback عشان الكود يفضل شغال حتى لو الـ relay اتشال يوم من الأيام).
-    """
     if settings.TELEGRAM_RELAY_BASE_URL:
         return f"{settings.TELEGRAM_RELAY_BASE_URL}/bot{settings.TELEGRAM_BOT_TOKEN}/{method}"
     return f"https://api.telegram.org/bot{settings.TELEGRAM_BOT_TOKEN}/{method}"
@@ -24,7 +42,7 @@ def _post_with_retry(url, payload, headers=None, timeout=15, retries=1):
     last_error = None
     for attempt in range(retries + 1):
         try:
-            response = requests.post(url, data=payload, headers=headers, timeout=timeout)
+            response = _session.post(url, data=payload, headers=headers, timeout=timeout)
             if response.status_code != 200:
                 print(f"Telegram request failed [{response.status_code}]: {response.text}")
             return response
@@ -33,8 +51,9 @@ def _post_with_retry(url, payload, headers=None, timeout=15, retries=1):
             print(f"Telegram request timed out (attempt {attempt + 1}/{retries + 1})")
             time.sleep(1)
         except requests.RequestException as e:
+            last_error = e
             print(f"Telegram request error: {e}")
-            return None
+            time.sleep(1)
     print(f"Telegram request failed after retries: {last_error}")
     return None
 
