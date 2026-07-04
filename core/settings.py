@@ -70,7 +70,13 @@ MIDDLEWARE = [
 ]
 
 ROOT_URLCONF = "core.urls"
+CORS_ALLOWED_ORIGINS = [
+    "https://homestyle-store.vercel.app",
+]
 CORS_ALLOW_ALL_ORIGINS = True
+CORS_ALLOWED_ORIGIN_REGEXES = [
+    r"^https://homestyle-store.*\.vercel\.app$",
+]
 
 TEMPLATES = [
     {
@@ -190,5 +196,5 @@ SPECTACULAR_SETTINGS = {
 }
 CSRF_TRUSTED_ORIGINS = [
     "https://mahmoudelbedewy-fureniture.hf.space",
-    "https://HomeStyle.vercel.app",
+    "https://homestyle-store.vercel.app",
 ]
