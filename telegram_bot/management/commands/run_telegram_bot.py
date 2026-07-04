@@ -25,7 +25,7 @@ class Command(BaseCommand):
                     params["offset"] = offset
 
                 response = requests.get(
-                    f"{base_url}/getUpdates", params=params, timeout=35
+                    f"{base_url}/getUpdates", params=params, timeout=(10, 40)
                 )
                 data = response.json()
 
@@ -51,12 +51,12 @@ class Command(BaseCommand):
                             )
                         )
 
+            except requests.exceptions.ReadTimeout:
+                continue
             except requests.RequestException as e:
                 self.stdout.write(self.style.WARNING(f"خطأ مؤقت في الاتصال: {e}"))
                 time.sleep(5)
             except Exception as loop_error:  # noqa: BLE001
-                # Catch-all so a JSON parse error, KeyError, etc. from Telegram's
-                # response never takes the whole polling process down.
                 self.stdout.write(
                     self.style.ERROR(f"خطأ غير متوقع في اللوب الرئيسي: {loop_error}")
                 )
