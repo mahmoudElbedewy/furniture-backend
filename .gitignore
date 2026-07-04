@@ -1,0 +1,32 @@
+# Environments
+global_venv/
+venv/
+ENV/
+__pycache__/
+*.pyc
+.pytest_cache/
+
+# Database & local files
+db.sqlite3
+db.sqlite3-journal
+.env
+local_settings.py
+
+# IDE / installers
+.vscode/
+.idea/
+CursorUserSetup*
+*.exe
+*.log
+
+# Images (لو مش محتاجهم في الريبو)
+*.jpg
+*.jpeg
+*.png
+*.gif
+*.webp
+
+# Heavy folders
+node_modules/
+staticfiles/
+media/
