@@ -25,6 +25,7 @@ class OrderItemSerializer(serializers.ModelSerializer):
 class OrderSerializer(serializers.ModelSerializer):
     items = OrderItemSerializer(many=True)
     commission = serializers.SerializerMethodField()
+    deposit_proof_image = serializers.ImageField(required=False, allow_null=True)
 
     class Meta:
         model = Order
@@ -42,8 +43,24 @@ class OrderSerializer(serializers.ModelSerializer):
             "created_at",
             "items",
             "commission",
+            "deposit_proof_image",
+            "deposit_amount",
         )
-        read_only_fields = ("order_number", "total_price")
+        read_only_fields = ("order_number", "total_price", "deposit_amount")
+
+    def validate(self, attrs):
+        items = attrs.get("items", [])
+        total_deposit = sum(
+            (item["product"].deposit_amount or 0) * item.get("quantity", 1)
+            for item in items
+            if getattr(item["product"], "requires_deposit", False)
+        )
+        if total_deposit > 0 and not attrs.get("deposit_proof_image"):
+            raise serializers.ValidationError(
+                {"deposit_proof_image": "يجب رفع صورة إيصال الديبوزيت لهذا الطلب."}
+            )
+        attrs["_total_deposit"] = total_deposit
+        return attrs
 
     def get_commission(self, obj):
         commission = getattr(obj, "commission", None)
@@ -60,12 +77,10 @@ class OrderSerializer(serializers.ModelSerializer):
         status = validated_data.get("status", instance.status)
         old_status = instance.status
 
-        # Update order fields
         for attr, value in validated_data.items():
             setattr(instance, attr, value)
         instance.save()
 
-        # Handle commission status when order status changes
         if status != old_status:
             from django.utils import timezone
 
@@ -84,6 +99,7 @@ class OrderSerializer(serializers.ModelSerializer):
 
     def create(self, validated_data):
         try:
+            total_deposit = validated_data.pop("_total_deposit", 0)
             items_data = validated_data.pop("items")
 
             shipping_price = validated_data.pop("shipping_price", 0)
@@ -105,7 +121,10 @@ class OrderSerializer(serializers.ModelSerializer):
             )
 
             order = Order.objects.create(
-                total_price=total, shipping_price=shipping_price, **validated_data
+                total_price=total,
+                shipping_price=shipping_price,
+                deposit_amount=total_deposit,
+                **validated_data,
             )
 
             request = self.context.get("request")
