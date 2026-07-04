@@ -24,4 +24,4 @@ USER user
 
 EXPOSE 7860
 
-CMD ["sh", "-c", "python manage.py collectstatic --noinput && python manage.py migrate && python manage.py createsuperuser --noinput || true && python manage.py run_telegram_bot & daphne -b 0.0.0.0 -p 7860 core.asgi:application"]
+CMD ["sh", "-c", "python manage.py collectstatic --noinput && python manage.py migrate && (python manage.py createsuperuser --noinput || true) && (python manage.py run_telegram_bot &) && daphne -b 0.0.0.0 -p 7860 core.asgi:application"]
