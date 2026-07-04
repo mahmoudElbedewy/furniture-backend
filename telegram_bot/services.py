@@ -5,6 +5,7 @@ from .models import AdminNotification
 
 def send_telegram_message(text: str) -> bool:
     if not settings.TELEGRAM_BOT_TOKEN or not settings.TELEGRAM_ADMIN_CHAT_ID:
+        print("Telegram: TELEGRAM_BOT_TOKEN or TELEGRAM_ADMIN_CHAT_ID is missing.")
         return False
     url = f"https://api.telegram.org/bot{settings.TELEGRAM_BOT_TOKEN}/sendMessage"
     payload = {
@@ -14,8 +15,11 @@ def send_telegram_message(text: str) -> bool:
     }
     try:
         response = requests.post(url, data=payload, timeout=10)
+        if response.status_code != 200:
+            print(f"Telegram sendMessage failed [{response.status_code}]: {response.text}")
         return response.status_code == 200
-    except requests.RequestException:
+    except requests.RequestException as e:
+        print(f"Telegram sendMessage request error: {e}")
         return False
 
 
@@ -26,6 +30,7 @@ def send_telegram_message_with_buttons(text: str, buttons: list) -> bool:
      {"text": "❌ رفض", "callback_data": "order_reject:ORD-XXXX"}]
     """
     if not settings.TELEGRAM_BOT_TOKEN or not settings.TELEGRAM_ADMIN_CHAT_ID:
+        print("Telegram: TELEGRAM_BOT_TOKEN or TELEGRAM_ADMIN_CHAT_ID is missing.")
         return False
     url = f"https://api.telegram.org/bot{settings.TELEGRAM_BOT_TOKEN}/sendMessage"
     payload = {
@@ -39,8 +44,11 @@ def send_telegram_message_with_buttons(text: str, buttons: list) -> bool:
 
         payload["reply_markup"] = json.dumps(payload["reply_markup"])
         response = requests.post(url, data=payload, timeout=10)
+        if response.status_code != 200:
+            print(f"Telegram sendMessage(buttons) failed [{response.status_code}]: {response.text}")
         return response.status_code == 200
-    except requests.RequestException:
+    except requests.RequestException as e:
+        print(f"Telegram sendMessage(buttons) request error: {e}")
         return False
 
 

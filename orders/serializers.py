@@ -158,16 +158,17 @@ class OrderSerializer(serializers.ModelSerializer):
         try:
             from telegram_bot.services import notify_admin
 
+            from html import escape
+
             lines = []
             for item in order.items.all():
                 product = item.product
                 base = product.base_price
                 commission = product.commission_value
                 after_commission = item.price_at_order_time
-                description = product.description or "لا يوجد وصف"
+                description = escape(product.description or "لا يوجد وصف")
                 item_shipping = item.shipping_price or 0
-                item_location = item.shipping_location or "غير محدد"
-
+                item_location = escape(item.shipping_location or "غير محدد")
                 lines.append(
                     f"━━━━━━━━━━━━━━━━━━\n"
                     f"📦 <b>{product.title}</b> x{item.quantity}\n"
@@ -185,12 +186,12 @@ class OrderSerializer(serializers.ModelSerializer):
                 f"🛒 <b>أوردر جديد</b>\n"
                 f"━━━━━━━━━━━━━━━━━━\n"
                 f"🆔 رقم الأوردر: {order.order_number}\n"
-                f"👤 العميل: {order.customer_name}\n"
-                f"📱 رقم الهاتف: {order.customer_phone}\n"
-                f"📍 المحافظة: {order.customer_governorate}"
-                + (f" - {order.customer_area}" if order.customer_area else "")
+                f"👤 العميل: {escape(order.customer_name)}\n"
+                f"📱 رقم الهاتف: {escape(order.customer_phone)}\n"
+                f"📍 المحافظة: {escape(order.customer_governorate)}"
+                + (f" - {escape(order.customer_area)}" if order.customer_area else "")
                 + "\n"
-                f"🏠 العنوان: {order.customer_address}\n"
+                f"🏠 العنوان: {escape(order.customer_address)}\n"
                 f"━━━━━━━━━━━━━━━━━━\n"
                 f"📦 المنتجات:\n\n{items_text}\n"
                 f"━━━━━━━━━━━━━━━━━━\n"
