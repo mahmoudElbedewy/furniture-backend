@@ -198,3 +198,4 @@ CSRF_TRUSTED_ORIGINS = [
     "https://mahmoudelbedewy-fureniture.hf.space",
     "https://homestyle-store.vercel.app",
 ]
+DEFAULT_AUTO_FIELD = "django.db.models.BigAutoField"

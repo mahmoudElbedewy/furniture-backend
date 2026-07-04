@@ -1,5 +1,15 @@
+import uuid
+
 from django.http import JsonResponse
-from .models import Product
+from django.core.exceptions import ValidationError
+from django.db.models import F, Prefetch
+from .models import (
+    Category,
+    Product,
+    Review,
+    Favorite,
+    ProductShippingRate,
+)
 
 
 def product_cards_api(request):
@@ -7,12 +17,25 @@ def product_cards_api(request):
     if not ids_param:
         return JsonResponse({"products": []})
 
-    try:
-        ids_list = [uid.strip() for uid in ids_param.split(",") if uid.strip()]
-    except:
-        ids_list = []
+    raw_ids = [raw.strip() for raw in ids_param.split(",") if raw.strip()]
 
-    products = Product.objects.filter(id__in=ids_list, is_available=True)
+    # Product.id is a UUID field, so silently drop anything that isn't a
+    # valid UUID instead of letting Product.objects.filter(id__in=...)
+    # blow up with a 500 ValidationError.
+    valid_ids = []
+    for raw_id in raw_ids:
+        try:
+            valid_ids.append(uuid.UUID(raw_id))
+        except (ValueError, AttributeError, TypeError):
+            continue
+
+    if not valid_ids:
+        return JsonResponse({"products": []})
+
+    products = Product.objects.filter(
+        id__in=valid_ids, is_available=True
+    ).prefetch_related("images")
+
     data = []
     for p in products:
         data.append(
@@ -31,7 +54,6 @@ def product_cards_api(request):
 
 
 from rest_framework import generics, permissions
-from .models import Category, Product, Review, Favorite
 from .serializers import (
     CategorySerializer,
     ProductSerializer,
@@ -58,7 +80,20 @@ class ProductListView(generics.ListAPIView):
     pagination_class = StandardResultsSetPagination
 
     def get_queryset(self):
-        qs = Product.objects.filter(is_available=True)
+        qs = (
+            Product.objects.filter(is_available=True)
+            .select_related("category")
+            .prefetch_related(
+                "images",
+                Prefetch("reviews", queryset=Review.objects.order_by("-created_at")),
+                Prefetch(
+                    "shipping_rates",
+                    queryset=ProductShippingRate.objects.select_related(
+                        "governorate", "area"
+                    ),
+                ),
+            )
+        )
         params = self.request.query_params
 
         # فلتر البحث بالاسم
@@ -128,11 +163,30 @@ class ProductDetailView(generics.RetrieveAPIView):
     permission_classes = [permissions.AllowAny]
     lookup_field = "slug"
 
+    def get_queryset(self):
+        return (
+            super()
+            .get_queryset()
+            .select_related("category")
+            .prefetch_related(
+                "images",
+                Prefetch("reviews", queryset=Review.objects.order_by("-created_at")),
+                Prefetch(
+                    "shipping_rates",
+                    queryset=ProductShippingRate.objects.select_related(
+                        "governorate", "area"
+                    ),
+                ),
+            )
+        )
+
     def retrieve(self, request, *args, **kwargs):
         instance = self.get_object()
-        # Increment views_count
-        instance.views_count += 1
-        instance.save(update_fields=["views_count"])
+        # Atomic increment at the DB level so concurrent hits on the same
+        # product never lose an update (no read-then-write race).
+        Product.objects.filter(pk=instance.pk).update(
+            views_count=F("views_count") + 1
+        )
         serializer = self.get_serializer(instance)
         return Response(serializer.data)
 
@@ -219,7 +273,7 @@ class FavoriteToggleView(APIView):
 
         try:
             product = Product.objects.get(id=product_id, is_available=True)
-        except Product.DoesNotExist:
+        except (Product.DoesNotExist, ValueError, ValidationError):
             return Response(
                 {"error": "Product not found"}, status=status.HTTP_404_NOT_FOUND
             )

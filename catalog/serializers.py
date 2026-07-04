@@ -91,19 +91,32 @@ class ProductSerializer(serializers.ModelSerializer):
         )
 
     def get_images(self, obj):
+        # obj.images is prefetched in the view's queryset (prefetch_related),
+        # so .all() here reads from the cache instead of firing a query
+        # per product.
         imgs = obj.images.all()
         return ProductImageSerializer(imgs, many=True).data
 
     def get_reviews(self, obj):
-        revs = obj.reviews.all().order_by("-created_at")[:5]
+        # obj.reviews is prefetched and already ordered by -created_at via
+        # Prefetch(queryset=Review.objects.order_by("-created_at")) in the
+        # view. Calling .order_by() again here would not match that cached
+        # queryset and would silently trigger a brand new DB query per
+        # product instead of reusing the prefetch - so we only slice, in
+        # Python, on the already-ordered cached results.
+        revs = list(obj.reviews.all())[:5]
         return ReviewSerializer(revs, many=True).data
 
     def get_shipping_rates(self, obj):
+        # obj.shipping_rates is prefetched (with governorate/area
+        # select_related) in the view's queryset.
         rates = obj.shipping_rates.all()
         return ProductShippingRateSerializer(rates, many=True).data
 
     def get_shipping_summary(self, obj):
         """Create a creative, formatted shipping summary for display"""
+        # Reuses the same prefetched cache as get_shipping_rates - no
+        # extra query.
         rates = obj.shipping_rates.all()
         if not rates:
             return {
