@@ -199,3 +199,5 @@ CSRF_TRUSTED_ORIGINS = [
     "https://homestyle-store.vercel.app",
 ]
 DEFAULT_AUTO_FIELD = "django.db.models.BigAutoField"
+TELEGRAM_RELAY_BASE_URL = os.environ.get("TELEGRAM_RELAY_BASE_URL", "").rstrip("/")
+TELEGRAM_RELAY_SECRET = os.environ.get("TELEGRAM_RELAY_SECRET", "")

@@ -4,12 +4,27 @@ from django.conf import settings
 from .models import AdminNotification
 
 
-def _post_with_retry(url, payload, timeout=25, retries=1):
-    """يحاول يبعت الريكوست، ولو حصل ReadTimeout يعيد المحاولة مرة واحدة إضافية."""
+def _telegram_url(method: str) -> str:
+    """
+    بيبني الرابط: لو فيه relay مظبوط بيستخدمه، لو مفيش بيرجع لتليجرام مباشرة
+    (fallback عشان الكود يفضل شغال حتى لو الـ relay اتشال يوم من الأيام).
+    """
+    if settings.TELEGRAM_RELAY_BASE_URL:
+        return f"{settings.TELEGRAM_RELAY_BASE_URL}/bot{settings.TELEGRAM_BOT_TOKEN}/{method}"
+    return f"https://api.telegram.org/bot{settings.TELEGRAM_BOT_TOKEN}/{method}"
+
+
+def _relay_headers() -> dict:
+    if settings.TELEGRAM_RELAY_BASE_URL and settings.TELEGRAM_RELAY_SECRET:
+        return {"X-Relay-Secret": settings.TELEGRAM_RELAY_SECRET}
+    return {}
+
+
+def _post_with_retry(url, payload, headers=None, timeout=15, retries=1):
     last_error = None
     for attempt in range(retries + 1):
         try:
-            response = requests.post(url, data=payload, timeout=timeout)
+            response = requests.post(url, data=payload, headers=headers, timeout=timeout)
             if response.status_code != 200:
                 print(f"Telegram request failed [{response.status_code}]: {response.text}")
             return response
@@ -28,13 +43,14 @@ def send_telegram_message(text: str) -> bool:
     if not settings.TELEGRAM_BOT_TOKEN or not settings.TELEGRAM_ADMIN_CHAT_ID:
         print("Telegram: TELEGRAM_BOT_TOKEN or TELEGRAM_ADMIN_CHAT_ID is missing.")
         return False
-    url = f"https://api.telegram.org/bot{settings.TELEGRAM_BOT_TOKEN}/sendMessage"
+
+    url = _telegram_url("sendMessage")
     payload = {
         "chat_id": settings.TELEGRAM_ADMIN_CHAT_ID,
         "text": text,
         "parse_mode": "HTML",
     }
-    response = _post_with_retry(url, payload)
+    response = _post_with_retry(url, payload, headers=_relay_headers())
     return response is not None and response.status_code == 200
 
 
@@ -47,16 +63,17 @@ def send_telegram_message_with_buttons(text: str, buttons: list) -> bool:
     if not settings.TELEGRAM_BOT_TOKEN or not settings.TELEGRAM_ADMIN_CHAT_ID:
         print("Telegram: TELEGRAM_BOT_TOKEN or TELEGRAM_ADMIN_CHAT_ID is missing.")
         return False
-    url = f"https://api.telegram.org/bot{settings.TELEGRAM_BOT_TOKEN}/sendMessage"
+
     import json
 
+    url = _telegram_url("sendMessage")
     payload = {
         "chat_id": settings.TELEGRAM_ADMIN_CHAT_ID,
         "text": text,
         "parse_mode": "HTML",
         "reply_markup": json.dumps({"inline_keyboard": [buttons]}),
     }
-    response = _post_with_retry(url, payload)
+    response = _post_with_retry(url, payload, headers=_relay_headers())
     return response is not None and response.status_code == 200
 
 

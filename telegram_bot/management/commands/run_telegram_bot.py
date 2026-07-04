@@ -8,12 +8,21 @@ from telegram_bot.handlers import handle_order_approval, handle_order_rejection
 class Command(BaseCommand):
     help = "يشغّل بوت تليجرام في وضع Polling لاستقبال ضغطات أزرار الموافقة/الرفض"
 
-    def handle(self, *args, **options):
+    def _base_url(self):
         token = settings.TELEGRAM_BOT_TOKEN
-        base_url = f"https://api.telegram.org/bot{token}"
+        if settings.TELEGRAM_RELAY_BASE_URL:
+            return f"{settings.TELEGRAM_RELAY_BASE_URL}/bot{token}"
+        return f"https://api.telegram.org/bot{token}"
+
+    def _relay_headers(self):
+        if settings.TELEGRAM_RELAY_BASE_URL and settings.TELEGRAM_RELAY_SECRET:
+            return {"X-Relay-Secret": settings.TELEGRAM_RELAY_SECRET}
+        return {}
+
+    def handle(self, *args, **options):
+        base_url = self._base_url()
+        headers = self._relay_headers()
         offset = None
-        # Post-request timeout for answerCallbackQuery / editMessageText,
-        # separate from the long-poll timeout used for getUpdates.
         post_timeout = 15
 
         self.stdout.write(self.style.SUCCESS("بوت التليجرام شغال... (Polling)"))
@@ -25,7 +34,10 @@ class Command(BaseCommand):
                     params["offset"] = offset
 
                 response = requests.get(
-                    f"{base_url}/getUpdates", params=params, timeout=(10, 40)
+                    f"{base_url}/getUpdates",
+                    params=params,
+                    headers=headers,
+                    timeout=(10, 40),
                 )
                 data = response.json()
 
@@ -37,13 +49,10 @@ class Command(BaseCommand):
                     continue
 
                 for update in data.get("result", []):
-                    # Advance the offset immediately so a bad update never
-                    # gets stuck retrying forever, then isolate everything
-                    # else so one failure can't kill the whole loop.
                     offset = update["update_id"] + 1
 
                     try:
-                        self._process_update(update, base_url, post_timeout)
+                        self._process_update(update, base_url, headers, post_timeout)
                     except Exception as update_error:  # noqa: BLE001
                         self.stdout.write(
                             self.style.ERROR(
@@ -52,6 +61,7 @@ class Command(BaseCommand):
                         )
 
             except requests.exceptions.ReadTimeout:
+                # طبيعي جدًا في الـ long polling، مفيش تحديثات جديدة
                 continue
             except requests.RequestException as e:
                 self.stdout.write(self.style.WARNING(f"خطأ مؤقت في الاتصال: {e}"))
@@ -62,7 +72,7 @@ class Command(BaseCommand):
                 )
                 time.sleep(5)
 
-    def _process_update(self, update, base_url, post_timeout):
+    def _process_update(self, update, base_url, headers, post_timeout):
         callback_query = update.get("callback_query")
         if not callback_query:
             return
@@ -75,6 +85,7 @@ class Command(BaseCommand):
             requests.post(
                 f"{base_url}/answerCallbackQuery",
                 data={"callback_query_id": callback_id, "text": "غير مصرح"},
+                headers=headers,
                 timeout=post_timeout,
             )
             return
@@ -103,6 +114,7 @@ class Command(BaseCommand):
         requests.post(
             f"{base_url}/answerCallbackQuery",
             data={"callback_query_id": callback_id, "text": result_text},
+            headers=headers,
             timeout=post_timeout,
         )
 
@@ -113,5 +125,6 @@ class Command(BaseCommand):
                 "message_id": callback_query["message"]["message_id"],
                 "text": callback_query["message"]["text"] + f"\n\n{result_text}",
             },
+            headers=headers,
             timeout=post_timeout,
         )
