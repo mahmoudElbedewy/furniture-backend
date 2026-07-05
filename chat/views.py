@@ -139,6 +139,16 @@ class ChatSendMessageView(APIView):
 
         created_messages = [customer_message]
 
+        if sender_type == "customer":
+            from .notifications import send_ntfy_alert
+
+            send_ntfy_alert(
+                title="💬 رسالة عميل جديدة",
+                message=f"{conversation.customer_name}: {content}",
+            )
+
+        created_messages = [customer_message]
+
         if sender_type == "customer" and conversation.status != "needs_admin":
             conversation.status = "open"
             conversation.save(update_fields=["status", "last_message_at"])

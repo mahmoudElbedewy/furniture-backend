@@ -99,6 +99,14 @@ class ChatConsumer(AsyncWebsocketConsumer):
             conversation.status = "open"
             conversation.save()
 
+        if sender_type == "customer":
+            from .notifications import send_ntfy_alert
+
+            send_ntfy_alert(
+                title="💬 رسالة عميل جديدة",
+                message=f"{conversation.customer_name}: {content}",
+            )
+
         return {
             "content": msg.content,
             "sender_type": msg.sender_type,
