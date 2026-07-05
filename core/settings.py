@@ -14,6 +14,7 @@ import os
 from decouple import config
 from pathlib import Path
 import dj_database_url
+from datetime import timedelta
 
 BASE_DIR = Path(__file__).resolve().parent.parent
 
@@ -202,3 +203,10 @@ DEFAULT_AUTO_FIELD = "django.db.models.BigAutoField"
 TELEGRAM_RELAY_BASE_URL = os.environ.get("TELEGRAM_RELAY_BASE_URL", "").rstrip("/")
 TELEGRAM_RELAY_SECRET = os.environ.get("TELEGRAM_RELAY_SECRET", "")
 TELEGRAM_BRIDGE_SECRET = os.environ.get("TELEGRAM_BRIDGE_SECRET", "")
+
+SIMPLE_JWT = {
+    "ACCESS_TOKEN_LIFETIME": timedelta(days=1),
+    "REFRESH_TOKEN_LIFETIME": timedelta(days=7),
+    "ROTATE_REFRESH_TOKENS": True,
+    "BLACKLIST_AFTER_ROTATION": True,
+}
