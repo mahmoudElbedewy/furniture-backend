@@ -14,6 +14,11 @@ class AdminNotification(models.Model):
     is_read = models.BooleanField(default=False)
     sent_via_telegram = models.BooleanField(default=False)
     created_at = models.DateTimeField(auto_now_add=True)
+    buttons = models.JSONField(blank=True, null=True, default=list)
 
     def __str__(self):
         return f"{self.get_type_display()} - {self.message[:40]}"
+
+class TelegramBridgeState(models.Model):
+    key = models.CharField(max_length=50, unique=True)
+    value = models.CharField(max_length=100, blank=True, default="")
