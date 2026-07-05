@@ -8,6 +8,8 @@ from agent.models import AgentSettings
 from agent.customer_agent import get_agent_reply
 from asgiref.sync import async_to_sync
 import uuid
+from django.http import JsonResponse
+import requests
 
 
 def resolve_customer_identifier(request, data=None):
@@ -178,3 +180,15 @@ class ChatSendMessageView(APIView):
             {"messages": ChatMessageSerializer(created_messages, many=True).data},
             status=status.HTTP_201_CREATED,
         )
+
+def ntfy_test_view(request):
+    try:
+        r = requests.post(
+            "https://ntfy.sh/furniture_alert_messages",
+            data="اختبار من HF".encode("utf-8"),
+            headers={"Title": "اختبار الإشعارات".encode("utf-8")},
+            timeout=10,
+        )
+        return JsonResponse({"ok": True, "status": r.status_code, "response": r.text})
+    except Exception as e:
+        return JsonResponse({"ok": False, "error": str(e)})
