@@ -106,12 +106,9 @@ def notify_manual_mode_customer_message(sender, instance, created, **kwargs):
 
     settings = AgentSettings.load()
     auto_is_effective = (
-        conversation.force_agent_auto
-        or (
-            conversation.is_agent_active
-            and settings.is_globally_active
-            and settings.auto_reply_mode == "full_auto"
-        )
+        conversation.is_agent_active
+        and settings.is_globally_active
+        and settings.auto_reply_mode == "full_auto"
     )
     if auto_is_effective:
         return
