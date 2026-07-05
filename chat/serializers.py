@@ -11,4 +11,4 @@ class ChatConversationSerializer(serializers.ModelSerializer):
 
     class Meta:
         model = ChatConversation
-        fields = ['id', 'customer_identifier', 'customer_name', 'status', 'is_agent_active', 'force_agent_auto', 'created_at', 'last_message_at', 'messages']
+        fields = ['id', 'customer_identifier', 'customer_name', 'status', 'is_agent_active', 'created_at', 'last_message_at', 'messages']
