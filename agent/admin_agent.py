@@ -44,11 +44,27 @@ def process_product_extraction(admin_text: str, image_urls_json: str, previous_p
 
     if data.get("ready_for_approval"):
         # إنشاء الطلب في الداتابيز عشان يتبعت لتيليجرام
-        AgentActionRequest.objects.create(
+        req = AgentActionRequest.objects.create(
             action_type='add_product',
             payload=data,
             reason="طلب إضافة منتج من الشات الإداري",
             status='pending'
+        )
+        from telegram_bot.services import notify_admin
+        summary = (
+            f"🛋️ طلب إضافة منتج جديد:\n"
+            f"الاسم: {data.get('title')}\n"
+            f"السعر: {data.get('base_price')} + عمولة {data.get('commission_value')}\n"
+            f"التصنيف: {data.get('category_name')}"
+        )
+        notify_admin(
+            notification_type="agent_action",
+            related_object_id=req.id,
+            message=summary,
+            buttons=[
+                {"text": "✅ موافقة", "callback_data": f"agent_approve:{req.id}"},
+                {"text": "❌ رفض", "callback_data": f"agent_reject:{req.id}"},
+            ],
         )
         return json.dumps({
             "status": "success",

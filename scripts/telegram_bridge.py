@@ -71,15 +71,54 @@ def process_telegram_updates():
             action_resp = requests.post(
                 f"{BRIDGE_API}/approve/{order_number}/", headers=HEADERS, timeout=20
             )
-            result_text = action_resp.json().get("result", "تم") if action_resp.status_code == 200 else "حصل خطأ"
+            result_text = (
+                action_resp.json().get("result", "تم")
+                if action_resp.status_code == 200
+                else "حصل خطأ"
+            )
 
         elif callback_data.startswith("order_reject:"):
             order_number = callback_data.split(":", 1)[1]
             action_resp = requests.post(
                 f"{BRIDGE_API}/reject/{order_number}/", headers=HEADERS, timeout=20
             )
-            result_text = action_resp.json().get("result", "تم") if action_resp.status_code == 200 else "حصل خطأ"
+            result_text = (
+                action_resp.json().get("result", "تم")
+                if action_resp.status_code == 200
+                else "حصل خطأ"
+            )
+        elif callback_data.startswith("order_reject:"):
+            order_number = callback_data.split(":", 1)[1]
+            action_resp = requests.post(
+                f"{BRIDGE_API}/reject/{order_number}/", headers=HEADERS, timeout=20
+            )
+            result_text = (
+                action_resp.json().get("result", "تم")
+                if action_resp.status_code == 200
+                else "حصل خطأ"
+            )
 
+        elif callback_data.startswith("agent_approve:"):
+            req_id = callback_data.split(":", 1)[1]
+            action_resp = requests.post(
+                f"{BRIDGE_API}/agent-approve/{req_id}/", headers=HEADERS, timeout=20
+            )
+            result_text = (
+                action_resp.json().get("result", "تم")
+                if action_resp.status_code == 200
+                else "حصل خطأ"
+            )
+
+        elif callback_data.startswith("agent_reject:"):
+            req_id = callback_data.split(":", 1)[1]
+            action_resp = requests.post(
+                f"{BRIDGE_API}/agent-reject/{req_id}/", headers=HEADERS, timeout=20
+            )
+            result_text = (
+                action_resp.json().get("result", "تم")
+                if action_resp.status_code == 200
+                else "حصل خطأ"
+            )
         requests.post(
             f"{TG_API}/answerCallbackQuery",
             data={"callback_query_id": callback_id, "text": result_text},
@@ -98,7 +137,10 @@ def process_telegram_updates():
 
     if new_offset != offset:
         requests.post(
-            f"{BRIDGE_API}/offset/", headers=HEADERS, json={"offset": new_offset}, timeout=20
+            f"{BRIDGE_API}/offset/",
+            headers=HEADERS,
+            json={"offset": new_offset},
+            timeout=20,
         )
 
 
