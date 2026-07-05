@@ -94,6 +94,7 @@ def process_telegram_updates():
             },
             timeout=15,
         )
+        print(f"processed callback '{callback_data}' -> {result_text}")
 
     if new_offset != offset:
         requests.post(
