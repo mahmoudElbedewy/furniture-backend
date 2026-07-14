@@ -144,7 +144,10 @@ def process_telegram_updates():
         )
 
 
-if __name__ == "__main__":
+import time
+
+
+def run_once():
     try:
         send_pending_notifications()
     except Exception as e:
@@ -154,3 +157,21 @@ if __name__ == "__main__":
         process_telegram_updates()
     except Exception as e:
         print(f"process_telegram_updates failed: {e}")
+
+
+if __name__ == "__main__":
+    start_time = time.time()
+    loop_duration = 280  # Run for 280 seconds (just under 5 minutes)
+    interval = 15  # Check every 15 seconds
+
+    print("Starting Telegram Bridge loop...")
+    while time.time() - start_time < loop_duration:
+        loop_start = time.time()
+        
+        run_once()
+        
+        elapsed = time.time() - loop_start
+        sleep_time = max(0, interval - elapsed)
+        if sleep_time > 0:
+            time.sleep(sleep_time)
+    print("Bridge loop finished successfully.")

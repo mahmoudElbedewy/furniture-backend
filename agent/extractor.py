@@ -1,6 +1,7 @@
 import json
 from .llm_config import vision_llm, light_llm
 
+
 REQUIRED_FIELDS = [
     "title",
     "category_name",

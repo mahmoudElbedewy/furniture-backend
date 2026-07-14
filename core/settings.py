@@ -26,7 +26,11 @@ BASE_DIR = Path(__file__).resolve().parent.parent
 SECRET_KEY = config("SECRET_KEY")
 DEBUG = config("DEBUG", default=True, cast=bool)
 
-ALLOWED_HOSTS = ["*"]
+ALLOWED_HOSTS = [
+    "mahmoudelbedewy-fureniture.hf.space",
+    "localhost",
+    "127.0.0.1",
+]
 
 
 # Application definition
@@ -61,7 +65,7 @@ INSTALLED_APPS = [
 MIDDLEWARE = [
     "corsheaders.middleware.CorsMiddleware",
     "django.middleware.security.SecurityMiddleware",
-    'whitenoise.middleware.WhiteNoiseMiddleware', 
+    "whitenoise.middleware.WhiteNoiseMiddleware",
     "django.contrib.sessions.middleware.SessionMiddleware",
     "django.middleware.common.CommonMiddleware",
     "django.middleware.csrf.CsrfViewMiddleware",
@@ -73,8 +77,9 @@ MIDDLEWARE = [
 ROOT_URLCONF = "core.urls"
 CORS_ALLOWED_ORIGINS = [
     "https://homestyle-store.vercel.app",
+    "http://localhost:5173",
+    "http://127.0.0.1:5173",
 ]
-CORS_ALLOW_ALL_ORIGINS = True
 CORS_ALLOWED_ORIGIN_REGEXES = [
     r"^https://homestyle-store.*\.vercel\.app$",
 ]
@@ -146,14 +151,10 @@ USE_TZ = True
 AUTH_USER_MODEL = "accounts.User"
 
 # Static files configuration
-STATIC_URL = '/static/'
-STATIC_ROOT = BASE_DIR / 'staticfiles'
+STATIC_URL = "/static/"
+STATIC_ROOT = BASE_DIR / "staticfiles"
 
-STORAGES = {
-    "staticfiles": {
-        "BACKEND": "whitenoise.storage.CompressedManifestStaticFilesStorage",
-    },
-}
+
 STATICFILES_DIRS = [
     BASE_DIR / "static",
 ]
@@ -169,7 +170,7 @@ STORAGES = {
         "BACKEND": "cloudinary_storage.storage.MediaCloudinaryStorage",
     },
     "staticfiles": {
-        "BACKEND": "django.contrib.staticfiles.storage.StaticFilesStorage",
+        "BACKEND": "whitenoise.storage.CompressedManifestStaticFilesStorage",
     },
 }
 
@@ -178,7 +179,10 @@ CSRF_TRUSTED_ORIGINS = [
     "http://localhost:8000",
     "http://localhost:5173",
     "http://127.0.0.1:5173",
+    "https://mahmoudelbedewy-fureniture.hf.space",
+    "https://homestyle-store.vercel.app",
 ]
+
 TELEGRAM_BOT_TOKEN = config("TELEGRAM_BOT_TOKEN", default="")
 TELEGRAM_ADMIN_CHAT_ID = config("TELEGRAM_ADMIN_CHAT_ID", default="")
 
@@ -187,6 +191,14 @@ REST_FRAMEWORK = {
     "DEFAULT_AUTHENTICATION_CLASSES": (
         "rest_framework_simplejwt.authentication.JWTAuthentication",
     ),
+    "DEFAULT_THROTTLE_CLASSES": [
+        "rest_framework.throttling.AnonRateThrottle",
+        "rest_framework.throttling.UserRateThrottle",
+    ],
+    "DEFAULT_THROTTLE_RATES": {
+        "anon": "30/minute",
+        "user": "60/minute",
+    }
 }
 
 SPECTACULAR_SETTINGS = {
@@ -195,10 +207,7 @@ SPECTACULAR_SETTINGS = {
     "VERSION": "1.0.0",
     "SERVE_INCLUDE_SCHEMA": False,
 }
-CSRF_TRUSTED_ORIGINS = [
-    "https://mahmoudelbedewy-fureniture.hf.space",
-    "https://homestyle-store.vercel.app",
-]
+
 DEFAULT_AUTO_FIELD = "django.db.models.BigAutoField"
 TELEGRAM_RELAY_BASE_URL = os.environ.get("TELEGRAM_RELAY_BASE_URL", "").rstrip("/")
 TELEGRAM_RELAY_SECRET = os.environ.get("TELEGRAM_RELAY_SECRET", "")

@@ -2,7 +2,6 @@ import uuid
 from django.db import models
 from suppliers.models import Supplier
 
-
 def category_image_upload_path(instance, filename):
     ext = filename.split(".")[-1]
     return f"categories/{uuid.uuid4().hex}.{ext}"
