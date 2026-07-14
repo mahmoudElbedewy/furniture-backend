@@ -27,12 +27,12 @@ def process_product_extraction(admin_text: str, image_urls_json: str, previous_p
     """
     try:
         image_urls = json.loads(image_urls_json)
-    except:
+    except (TypeError, ValueError):
         image_urls = []
-        
+
     try:
         previous_payload = json.loads(previous_payload_json)
-    except:
+    except (TypeError, ValueError):
         previous_payload = {}
 
     data = extract_product_data(
@@ -43,7 +43,6 @@ def process_product_extraction(admin_text: str, image_urls_json: str, previous_p
     )
 
     if data.get("ready_for_approval"):
-        # إنشاء الطلب في الداتابيز عشان يتبعت لتيليجرام
         req = AgentActionRequest.objects.create(
             action_type='add_product',
             payload=data,

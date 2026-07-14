@@ -1,5 +1,5 @@
 from rest_framework import serializers
-from .models import Order, OrderItem
+from .models import Order, OrderItem, Commission
 from catalog.models import Product
 
 
@@ -101,22 +101,14 @@ class OrderSerializer(serializers.ModelSerializer):
         try:
             total_deposit = validated_data.pop("_total_deposit", 0)
             items_data = validated_data.pop("items")
-
             shipping_price = validated_data.pop("shipping_price", 0)
-            # Convert to Decimal if needed
             if shipping_price is not None:
                 from decimal import Decimal
-
                 if not isinstance(shipping_price, Decimal):
                     shipping_price = Decimal(str(shipping_price))
 
             total = (
-                sum(
-                    [
-                        item["product"].final_price * item.get("quantity", 1)
-                        for item in items_data
-                    ]
-                )
+                sum([item["product"].final_price * item.get("quantity", 1) for item in items_data])
                 + shipping_price
             )
 
@@ -132,6 +124,7 @@ class OrderSerializer(serializers.ModelSerializer):
                 order.user = request.user
                 order.save()
 
+            commission_total = 0
             for item_data in items_data:
                 OrderItem.objects.create(
                     order=order,
@@ -141,14 +134,15 @@ class OrderSerializer(serializers.ModelSerializer):
                     shipping_price=item_data.get("shipping_price", 0),
                     shipping_location=item_data.get("shipping_location", ""),
                 )
+                commission_total += item_data["product"].commission_value * item_data.get("quantity", 1)
 
-            # Send Telegram notification after items are created
+            if commission_total > 0:
+                Commission.objects.create(order=order, amount=commission_total)
+
             self._send_telegram_notification(order)
-
             return order
         except Exception as e:
             import traceback
-
             print(f"Error creating order: {e}")
             print(traceback.format_exc())
             raise

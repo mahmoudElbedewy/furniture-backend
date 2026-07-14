@@ -5,6 +5,8 @@ from channels.db import database_sync_to_async
 from .models import ChatConversation, ChatMessage
 from agent.models import AgentSettings
 from agent.customer_agent import get_agent_reply
+from accounts.identity import verify_identity_token
+
 
 
 class ChatConsumer(AsyncWebsocketConsumer):
@@ -25,9 +27,15 @@ class ChatConsumer(AsyncWebsocketConsumer):
         message = text_data_json.get("message")
         sender_type = text_data_json.get("sender_type", "customer")
         context_data = text_data_json.get("context")
+        identity_token = text_data_json.get("identity_token")
 
         if not message:
             return
+        
+        if sender_type == "customer":
+            authorized = await self.is_authorized_customer(identity_token)
+            if not authorized:
+                return 
 
         saved_msg = await self.save_message(
             self.conversation_id, sender_type, message
@@ -47,6 +55,22 @@ class ChatConsumer(AsyncWebsocketConsumer):
             asyncio.create_task(
                 self.process_agent_reply(message, context_data)
             )
+
+    @database_sync_to_async
+    def is_authorized_customer(self, identity_token):
+        try:
+            conversation = ChatConversation.objects.get(id=self.conversation_id)
+        except ChatConversation.DoesNotExist:
+            return False
+
+        user = self.scope.get("user")
+        if user and getattr(user, "is_authenticated", False):
+            email = (user.email or "").strip().lower()
+            identifier = email.split("@")[0] if email and "@" in email else str(user.id)
+            return conversation.customer_identifier == identifier
+
+        identifier = verify_identity_token(identity_token)
+        return bool(identifier) and conversation.customer_identifier == identifier
 
     async def process_agent_reply(self, customer_message, context_data=None):
         agent_status = await self.get_agent_status()

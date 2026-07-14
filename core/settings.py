@@ -219,3 +219,6 @@ SIMPLE_JWT = {
     "ROTATE_REFRESH_TOKENS": True,
     "BLACKLIST_AFTER_ROTATION": True,
 }
+NTFY_TOPIC = config("NTFY_TOPIC", default="furniture_alert_messages") 
+TELEGRAM_WEBHOOK_SECRET = config("TELEGRAM_WEBHOOK_SECRET", default="")
+NTFY_AUTH_TOKEN = config("NTFY_AUTH_TOKEN", default="")

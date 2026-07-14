@@ -1,3 +1,17 @@
+from rest_framework import generics, permissions
+from .serializers import (
+    CategorySerializer,
+    ProductSerializer,
+    ReviewSerializer,
+    FavoriteSerializer,
+)
+from rest_framework.pagination import PageNumberPagination
+from rest_framework.views import APIView
+from rest_framework.response import Response
+from rest_framework import status
+from django.shortcuts import get_object_or_404
+from orders.models import OrderItem
+from accounts.identity import resolve_identifier_for_request
 import uuid
 
 from django.http import JsonResponse
@@ -19,9 +33,6 @@ def product_cards_api(request):
 
     raw_ids = [raw.strip() for raw in ids_param.split(",") if raw.strip()]
 
-    # Product.id is a UUID field, so silently drop anything that isn't a
-    # valid UUID instead of letting Product.objects.filter(id__in=...)
-    # blow up with a 500 ValidationError.
     valid_ids = []
     for raw_id in raw_ids:
         try:
@@ -53,14 +64,6 @@ def product_cards_api(request):
     return JsonResponse({"products": data})
 
 
-from rest_framework import generics, permissions
-from .serializers import (
-    CategorySerializer,
-    ProductSerializer,
-    ReviewSerializer,
-    FavoriteSerializer,
-)
-from rest_framework.pagination import PageNumberPagination
 
 
 class StandardResultsSetPagination(PageNumberPagination):
@@ -96,17 +99,14 @@ class ProductListView(generics.ListAPIView):
         )
         params = self.request.query_params
 
-        # فلتر البحث بالاسم
         search = params.get("search")
         if search:
             qs = qs.filter(title__icontains=search)
 
-        # فلتر حسب التصنيف
         category = params.get("category")
         if category:
             qs = qs.filter(category__slug=category)
 
-        # فلتر السعر (من - إلى)
         min_price = params.get("min_price")
         max_price = params.get("max_price")
         if min_price:
@@ -114,17 +114,14 @@ class ProductListView(generics.ListAPIView):
         if max_price:
             qs = qs.filter(final_price__lte=max_price)
 
-        # فلتر حسب الخامة
         material = params.get("material")
         if material:
             qs = qs.filter(material__icontains=material)
 
-        # فلتر حسب اللون
         color = params.get("color")
         if color:
             qs = qs.filter(color__icontains=color)
 
-        # فلتر المنتجات اللى عليها ديبوزيت
         has_deposit = params.get("has_deposit")
         if has_deposit is not None:
             if has_deposit.lower() in ("true", "1", "yes"):
@@ -132,7 +129,6 @@ class ProductListView(generics.ListAPIView):
             elif has_deposit.lower() in ("false", "0", "no"):
                 qs = qs.filter(requires_deposit=False)
 
-        # فلتر حسب الشحن لكل الجمهورية
         ships_nationwide = params.get("ships_nationwide")
         if ships_nationwide is not None:
             if ships_nationwide.lower() in ("true", "1", "yes"):
@@ -140,7 +136,6 @@ class ProductListView(generics.ListAPIView):
             elif ships_nationwide.lower() in ("false", "0", "no"):
                 qs = qs.filter(ships_nationwide=False)
 
-        # ترتيب
         ordering = params.get("ordering")
         if ordering in (
             "final_price",
@@ -182,8 +177,6 @@ class ProductDetailView(generics.RetrieveAPIView):
 
     def retrieve(self, request, *args, **kwargs):
         instance = self.get_object()
-        # Atomic increment at the DB level so concurrent hits on the same
-        # product never lose an update (no read-then-write race).
         Product.objects.filter(pk=instance.pk).update(
             views_count=F("views_count") + 1
         )
@@ -191,11 +184,7 @@ class ProductDetailView(generics.RetrieveAPIView):
         return Response(serializer.data)
 
 
-from rest_framework.views import APIView
-from rest_framework.response import Response
-from rest_framework import status
-from django.shortcuts import get_object_or_404
-from orders.models import OrderItem
+
 
 
 class ProductReviewListCreateView(APIView):
@@ -219,7 +208,6 @@ class ProductReviewListCreateView(APIView):
                     request.user.full_name or request.user.email.split("@")[0]
                 )
 
-            # Check if user bought and received this product
             has_purchased = OrderItem.objects.filter(
                 order__user=request.user, product=product, order__status="delivered"
             ).exists()
@@ -248,7 +236,7 @@ class FavoriteListView(generics.ListAPIView):
     permission_classes = [permissions.AllowAny]
 
     def get_queryset(self):
-        customer_identifier = self.request.query_params.get("customer_identifier")
+        customer_identifier = resolve_identifier_for_request(self.request, self.request.query_params)
         if not customer_identifier:
             return Favorite.objects.none()
         return (
@@ -263,33 +251,25 @@ class FavoriteToggleView(APIView):
 
     def post(self, request):
         product_id = request.data.get("product_id")
-        customer_identifier = request.data.get("customer_identifier")
+        customer_identifier = resolve_identifier_for_request(request)
 
         if not product_id or not customer_identifier:
             return Response(
-                {"error": "product_id and customer_identifier are required"},
+                {"error": "product_id مطلوب و identity_token غير صالح"},
                 status=status.HTTP_400_BAD_REQUEST,
             )
-
         try:
             product = Product.objects.get(id=product_id, is_available=True)
         except (Product.DoesNotExist, ValueError, ValidationError):
-            return Response(
-                {"error": "Product not found"}, status=status.HTTP_404_NOT_FOUND
-            )
+            return Response({"error": "Product not found"}, status=status.HTTP_404_NOT_FOUND)
 
         favorite, created = Favorite.objects.get_or_create(
             product=product, customer_identifier=customer_identifier
         )
-
         if created:
-            serializer = FavoriteSerializer(favorite)
-            return Response(serializer.data, status=status.HTTP_201_CREATED)
-        else:
-            favorite.delete()
-            return Response(
-                {"message": "Removed from favorites"}, status=status.HTTP_200_OK
-            )
+            return Response(FavoriteSerializer(favorite).data, status=status.HTTP_201_CREATED)
+        favorite.delete()
+        return Response({"message": "Removed from favorites"}, status=status.HTTP_200_OK)
 
 
 class FavoriteCheckView(APIView):
@@ -297,13 +277,10 @@ class FavoriteCheckView(APIView):
 
     def get(self, request):
         product_id = request.query_params.get("product_id")
-        customer_identifier = request.query_params.get("customer_identifier")
-
+        customer_identifier = resolve_identifier_for_request(request, request.query_params)
         if not product_id or not customer_identifier:
             return Response({"is_favorited": False}, status=status.HTTP_200_OK)
-
         is_favorited = Favorite.objects.filter(
             product_id=product_id, customer_identifier=customer_identifier
         ).exists()
-
         return Response({"is_favorited": is_favorited}, status=status.HTTP_200_OK)

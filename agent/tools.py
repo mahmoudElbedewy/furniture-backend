@@ -4,6 +4,8 @@ from channels.db import database_sync_to_async
 from catalog.models import Product
 from chat.models import ChatConversation
 from orders.models import Order, OrderItem
+from django.db import transaction
+from orders.models import Order, OrderItem, Commission
 
 
 def _build_order_telegram_message(order) -> tuple[str, list]:
@@ -359,8 +361,7 @@ async def create_order_from_chat(
     conversation_id: str = None,
 ) -> str:
     """ينشئ أوردر جديد للعميل بعد تجميع بياناته كاملة.
-    ⚠️ لازم تكون استخدمت check_deposit_requirements و get_shipping_options قبلها.
-    shipping_total: إجمالي الشحن بالجنيه. shipping_location: مكان الشحن المختار."""
+    ⚠️ لازم تكون استخدمت check_deposit_requirements و get_shipping_options قبلها."""
 
     @database_sync_to_async
     def _create():
@@ -368,56 +369,61 @@ async def create_order_from_chat(
         if not products:
             return "عذراً، المنتجات المطلوبة غير متوفرة حالياً."
 
-        products_total = sum(p.final_price for p in products)
-        shipping = Decimal(str(shipping_total or 0))
-        total_price = products_total + shipping
-
-        order = Order.objects.create(
-            customer_name=customer_name,
-            customer_phone=customer_phone,
-            customer_governorate=governorate,
-            customer_address=address,
-            shipping_price=shipping,
-            total_price=total_price,
-            status="pending_review",
-        )
-
-        per_item_shipping = shipping / len(products) if products else Decimal("0")
-
-        deposit_messages = []
-        for p in products:
-            OrderItem.objects.create(
-                order=order,
-                product=p,
-                quantity=1,
-                price_at_order_time=p.final_price,
-                shipping_price=per_item_shipping,
-                shipping_location=shipping_location or governorate,
+        deposit_products = [p for p in products if p.requires_deposit and p.deposit_amount]
+        if deposit_products:
+            names = "، ".join(p.title for p in deposit_products)
+            return (
+                f"المنتج ({names}) محتاج ديبوزيت مقدماً مع صورة إثبات التحويل، "
+                "وده مش متاح من هنا فى الشات. كمّل الأوردر من صفحة الدفع فى الموقع "
+                "عشان ترفع صورة الإيصال، وإحنا هنتابع معاك أول ما يوصلنا."
             )
-            if p.requires_deposit and p.deposit_amount:
-                deposit_messages.append(
-                    f"المنتج '{p.title}' عليه ديبوزيت {p.deposit_amount} جنيه. {p.deposit_note or ''}"
+
+        with transaction.atomic():
+            products_total = sum(p.final_price for p in products)
+            shipping = Decimal(str(shipping_total or 0))
+            total_price = products_total + shipping
+
+            order = Order.objects.create(
+                customer_name=customer_name,
+                customer_phone=customer_phone,
+                customer_governorate=governorate,
+                customer_address=address,
+                shipping_price=shipping,
+                total_price=total_price,
+                status="pending_review",
+            )
+
+            per_item_shipping = shipping / len(products) if products else Decimal("0")
+            for p in products:
+                OrderItem.objects.create(
+                    order=order,
+                    product=p,
+                    quantity=1,
+                    price_at_order_time=p.final_price,
+                    shipping_price=per_item_shipping,
+                    shipping_location=shipping_location or governorate,
                 )
 
-        if conversation_id:
-            try:
-                conv = ChatConversation.objects.get(id=conversation_id)
-                conv.last_message_at = order.created_at
-                conv.save(update_fields=["last_message_at"])
-            except ChatConversation.DoesNotExist:
-                pass
+            commission_total = sum(p.commission_value for p in products)
+            if commission_total > 0:
+                Commission.objects.create(order=order, amount=commission_total)
+
+            if conversation_id:
+                try:
+                    conv = ChatConversation.objects.get(id=conversation_id)
+                    conv.last_message_at = order.created_at
+                    conv.save(update_fields=["last_message_at"])
+                except ChatConversation.DoesNotExist:
+                    pass
 
         _send_order_telegram(order)
 
-        result = (
+        return (
             f"تم تسجيل الأوردر بنجاح! رقم الأوردر: {order.order_number}\n"
             f"إجمالي المنتجات: {products_total} جنيه\n"
             f"الشحن: {shipping} جنيه\n"
             f"الإجمالي الكلي: {total_price} جنيه"
         )
-        if deposit_messages:
-            result += "\n\n" + "\n".join(deposit_messages)
-        return result
 
     return await _create()
 

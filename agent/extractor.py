@@ -1,5 +1,7 @@
 import json
 from .llm_config import vision_llm, light_llm
+import re
+
 
 
 REQUIRED_FIELDS = [
@@ -117,6 +119,7 @@ def extract_product_data(
 
     try:
         data = json.loads(content)
+        data = _cross_check_commission(raw_text, data)
     except json.JSONDecodeError:
         return {
             "_raw_extraction_error": content,
@@ -124,7 +127,6 @@ def extract_product_data(
             "ready_for_approval": False,
         }
 
-    # لو فيه صور جديدة مرفوعة بس الموديل ماحطهاش (نادر بس للأمان)، ضيفها يدويًا
     if image_urls and not data.get("images"):
         data["images"] = [
             {"url": u, "is_primary": i == 0} for i, u in enumerate(image_urls)
@@ -133,4 +135,27 @@ def extract_product_data(
     missing = _get_missing_fields(data)
     data["missing_fields"] = missing
     data["ready_for_approval"] = len(missing) == 0
+    return data
+
+
+COMMISSION_REGEX = re.compile(
+    r"(?:commission(?:_value)?|عمولة)\s*[:\-]?\s*([\d,]+(?:\.\d+)?)", re.IGNORECASE
+)
+
+
+def _cross_check_commission(raw_text: str, data: dict) -> dict:
+    """تخفيف جزئي (A8) — مش حل نهائي. الموديلات المجانية بتغلط أحياناً فى
+    قراءة العمولة، فبنعمل مطابقة مباشرة بـ regex على النص الخام، ولو الرقم
+    مختلف عن رقم الموديل بناخد رقم الـ regex لأنه من غير اجتهاد."""
+    if not raw_text:
+        return data
+    match = COMMISSION_REGEX.search(raw_text)
+    if match:
+        try:
+            regex_value = float(match.group(1).replace(",", ""))
+        except ValueError:
+            return data
+        model_value = data.get("commission_value")
+        if model_value is None or float(model_value) != regex_value:
+            data["commission_value"] = regex_value
     return data

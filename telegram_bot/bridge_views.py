@@ -6,11 +6,13 @@ from django.views.decorators.csrf import csrf_exempt
 from django.views.decorators.http import require_http_methods
 from .models import AdminNotification, TelegramBridgeState
 from .handlers import handle_order_approval, handle_order_rejection
+import hmac
 
 
 def _check_secret(request):
-    return request.headers.get("X-Bridge-Secret") == settings.TELEGRAM_BRIDGE_SECRET
-
+    provided = request.headers.get("X-Bridge-Secret", "")
+    expected = settings.TELEGRAM_BRIDGE_SECRET or ""
+    return hmac.compare_digest(provided, expected)
 
 @require_http_methods(["GET"])
 def pending_notifications(request):

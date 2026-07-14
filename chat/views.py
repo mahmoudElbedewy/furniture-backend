@@ -10,21 +10,13 @@ from asgiref.sync import async_to_sync
 import uuid
 from django.http import JsonResponse
 import requests
-
+from accounts.identity import issue_identity_token, verify_identity_token, resolve_identifier_for_request
 
 def resolve_customer_identifier(request, data=None):
-    """معرّف المحادثة: جزء الإيميل قبل @ للمسجّلين، أو session_id للزوار."""
-    if request.user.is_authenticated:
-        email = (request.user.email or "").strip().lower()
-        if email and "@" in email:
-            return email.split("@")[0]
-        return str(request.user.id)
-
-    payload = data if data is not None else getattr(request, "data", {})
-    identifier = payload.get("customer_identifier") or payload.get("session_id")
-    if identifier:
-        return str(identifier).strip()
-    return None
+    """إصلاح A1: الزائر بقى مايقدرش يقرا شات حد تاني بمجرد إنه يبعت
+    customer_identifier بتاعه. المعرّف بقى إما من الـ JWT (مسجّلين) أو من
+    identity_token موقّع من السيرفر (زوار) بس."""
+    return resolve_identifier_for_request(request, data)
 
 
 def resolve_customer_name(request, data=None):
@@ -42,11 +34,15 @@ class ChatStartView(APIView):
     permission_classes = [permissions.AllowAny]
 
     def post(self, request):
-        identifier = resolve_customer_identifier(request)
-        created_session = False
-        if not identifier:
-            identifier = f"guest_{uuid.uuid4().hex[:12]}"
-            created_session = True
+        if request.user.is_authenticated:
+            identifier = resolve_customer_identifier(request)
+            identity_token = None
+        else:
+            token = request.data.get("identity_token")
+            identifier = verify_identity_token(token) if token else None
+            if not identifier:
+                identifier = f"guest_{uuid.uuid4().hex[:12]}"
+            identity_token = issue_identity_token(identifier)
 
         customer_name = resolve_customer_name(request)
         force_new = request.data.get("force_new", False)
@@ -55,8 +51,7 @@ class ChatStartView(APIView):
         if not force_new:
             conversation = (
                 ChatConversation.objects.filter(
-                    customer_identifier=identifier,
-                    status="open",
+                    customer_identifier=identifier, status="open"
                 )
                 .order_by("-last_message_at")
                 .first()
@@ -64,14 +59,13 @@ class ChatStartView(APIView):
 
         if not conversation:
             conversation = ChatConversation.objects.create(
-                customer_identifier=identifier,
-                customer_name=customer_name,
+                customer_identifier=identifier, customer_name=customer_name
             )
 
         data = ChatConversationSerializer(conversation).data
         data["customer_identifier"] = identifier
-        if created_session or not request.user.is_authenticated:
-            data["session_id"] = identifier
+        if identity_token:
+            data["identity_token"] = identity_token
         return Response(data, status=status.HTTP_200_OK)
 
 
@@ -81,9 +75,7 @@ class ChatHistoryView(APIView):
     def get(self, request, conversation_id):
         conversation = get_object_or_404(ChatConversation, id=conversation_id)
 
-        user_identifier = resolve_customer_identifier(
-            request, request.GET
-        ) or request.GET.get("customer_identifier") or request.GET.get("session_id")
+        user_identifier = resolve_customer_identifier(request, request.GET)
 
         if not user_identifier:
             return Response(

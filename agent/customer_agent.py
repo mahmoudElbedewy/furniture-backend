@@ -4,7 +4,6 @@ import random
 import re
 from langchain_core.messages import SystemMessage, HumanMessage, AIMessage, ToolMessage
 from channels.db import database_sync_to_async
-from catalog.models import Product
 from .llm_config import CHAT_LLMS
 from .persona_prompt import PERSONA_SYSTEM_PROMPT, DEPOSIT_WHATSAPP
 from .tools import (
@@ -19,6 +18,8 @@ from .tools import (
     get_product_details,
     list_catalog_products,
 )
+from django.core.cache import cache
+from catalog.models import Product, Governorate, Category
 
 TOOLS = [
     search_products,
@@ -82,35 +83,26 @@ TRACK_ORDER_PATTERNS = [r"تتبع", r"تراك", r"فين\s+الا?وردر", r
 
 CONFIRM_WORDS = ["تمام", "موافق", "أيوه", "ايوه", "نعم", "انفذ", "نفذ", "ماشي", "اوك", "ok", "yes", "اكيد", "أكيد"]
 
-CATEGORY_KEYWORDS = {
-    "دواليب": "دواليب",
-    "دولاب": "دواليب",
-    "ترابيز": "ترابيز",
-    "ترابيزة": "ترابيز",
-    "كنب": "كنب",
-    "سرير": "سرير",
-    "بانكيت": "بانكيت",
-    "بلاط": "بلاط",
-    "مطبخ": "مطبخ",
-}
-
-GOVERNORATES = [
-    "الإسكندرية",
-    "الاسكندرية",
-    "القاهرة",
-    "القاهره",
-    "الجيزة",
-    "الجيزه",
-    "الشرقية",
-    "الغربية",
-    "المنوفية",
-    "دمياط",
-    "بورسعيد",
-    "السويس",
-    "طنطا",
-]
 
 PHONE_PATTERN = re.compile(r"01[0125][0-9]{8}")
+@database_sync_to_async
+def _fetch_governorate_names() -> list[str]:
+    cached = cache.get("agent_governorate_names_v1")
+    if cached is not None:
+        return cached
+    names = list(Governorate.objects.values_list("name", flat=True))
+    cache.set("agent_governorate_names_v1", names, 60 * 30)
+    return names
+
+
+@database_sync_to_async
+def _fetch_category_keywords() -> dict:
+    cached = cache.get("agent_category_keywords_v1")
+    if cached is not None:
+        return cached
+    mapping = {_normalize_arabic(c.name): c.name for c in Category.objects.all()}
+    cache.set("agent_category_keywords_v1", mapping, 60 * 30)
+    return mapping
 
 
 def _strip_emojis(text: str) -> str:
@@ -244,10 +236,13 @@ def _agent_awaiting_confirmation(history_messages: list) -> bool:
 
 
 def _customer_confirmed_order(customer_message: str, history_messages: list) -> bool:
-    blob = _text_blob(customer_message)
-    if not any(w in blob for w in CONFIRM_WORDS):
+    if not _agent_awaiting_confirmation(history_messages):
         return False
-    return _agent_awaiting_confirmation(history_messages)
+    words = _normalize_arabic(customer_message).strip().split()
+    if not words or len(words) > 3:
+        return False
+    confirm_normalized = {_normalize_arabic(w) for w in CONFIRM_WORDS}
+    return all(w.strip(".!،") in confirm_normalized for w in words)
 
 
 def _should_collect_order_details(customer_message: str, history_messages: list) -> bool:
@@ -260,46 +255,58 @@ def _should_collect_order_details(customer_message: str, history_messages: list)
     return _is_order_intent(customer_message)
 
 
-def _parse_customer_details(text: str) -> tuple[str, str, str, str]:
+def _parse_customer_details(text: str, governorate_names: list[str]) -> tuple[str, str, str, str]:
     phone_match = PHONE_PATTERN.search(text)
     phone = phone_match.group(0) if phone_match else ""
-    remaining = text.replace(phone, "").strip() if phone else text.strip()
 
     governorate = ""
-    for gov in GOVERNORATES:
+    for gov in governorate_names:
         if gov in text or _normalize_arabic(gov) in _normalize_arabic(text):
-            governorate = gov.replace("الاسكندرية", "الإسكندرية").replace("القاهره", "القاهرة")
+            governorate = gov
             break
 
+    lines = [ln.strip() for ln in text.splitlines() if ln.strip()]
+
+    if len(lines) > 1:
+        name, name_found, address_lines = "عميل", False, []
+        for line in lines:
+            is_phone_line = bool(PHONE_PATTERN.search(line))
+            is_gov_line = bool(governorate) and governorate in line
+            if not name_found and not is_phone_line and not is_gov_line:
+                name, name_found = line, True
+                continue
+            if not is_phone_line and not is_gov_line:
+                address_lines.append(line)
+        address = " - ".join(address_lines) if address_lines else text
+        return name, phone, governorate, address
+
+    remaining = text.replace(phone, "").strip() if phone else text.strip()
     parts = remaining.split()
     name = parts[0] if parts else "عميل"
     address = remaining[len(name):].strip() if name in remaining else remaining
     return name, phone, governorate, address
 
-
-def _parse_search_params(text: str) -> dict:
+async def _parse_search_params(text: str) -> dict:
     blob = _text_blob(text)
     params = {"query": "", "category": None, "max_price": None, "min_price": None}
 
-    for keyword, category in CATEGORY_KEYWORDS.items():
-        if keyword in blob:
+    category_keywords = await _fetch_category_keywords()
+    for norm_keyword, category in category_keywords.items():
+        if norm_keyword in blob:
             params["category"] = category
-            params["query"] = keyword
+            params["query"] = category
             break
 
     max_match = re.search(r"(?:تحت|اقل|أقل|اقل\s+من|less\s+than|below)\s*(\d+)", blob)
     if max_match:
         params["max_price"] = float(max_match.group(1))
-
     min_match = re.search(r"(?:فوق|اكتر|أكثر|more\s+than|above)\s*(\d+)", blob)
     if min_match:
         params["min_price"] = float(min_match.group(1))
-
     if not params["query"]:
         params["query"] = text.strip()[:50]
 
     return {k: v for k, v in params.items() if v is not None}
-
 
 def _parse_shipping_price(shipping_str: str) -> tuple[float, str]:
     try:
@@ -378,7 +385,7 @@ def _build_order_start_reply(
 
 
 async def _handle_product_search(customer_message: str) -> str:
-    params = _parse_search_params(customer_message)
+    params = await _parse_search_params(customer_message)
     search_args = {"query": params.get("query", "")}
     if params.get("category"):
         search_args["category"] = params["category"]
@@ -418,6 +425,7 @@ async def _build_order_quote(
 ) -> str:
     product_id = str(context_data.get("product_id", ""))
     product_name = context_data.get("product_name", "المنتج")
+    governorate_names = await _fetch_governorate_names()
     name, phone, governorate, address = _parse_customer_details(customer_message)
 
     if not governorate:
@@ -487,6 +495,7 @@ async def _execute_confirmed_order(
         return "محتاج بياناتك الأول: الاسم، الموبايل، المحافظة، والعنوان."
 
     product_id = str(context_data["product_id"])
+    governorate_names = await _fetch_governorate_names()
     name, phone, governorate, address = _parse_customer_details(details_text)
 
     shipping_str = await get_shipping_options.ainvoke(
@@ -527,12 +536,17 @@ def _fetch_product_details(product_id: str) -> str | None:
 
 @database_sync_to_async
 def _fetch_catalog_summary() -> str:
+    cached = cache.get("agent_catalog_summary_v1")
+    if cached is not None:
+        return cached
     products = Product.objects.filter(is_available=True).select_related("category")[:80]
-    if not products:
-        return "لا توجد منتجات."
-    return "\n".join(
-        f"- {p.title} | {p.final_price}ج | id={p.id}" for p in products
+    summary = (
+        "لا توجد منتجات."
+        if not products
+        else "\n".join(f"- {p.title} | {p.final_price}ج | id={p.id}" for p in products)
     )
+    cache.set("agent_catalog_summary_v1", summary, 60 * 10)
+    return summary
 
 
 def _build_history_messages(history_messages: list):

@@ -1,5 +1,6 @@
 import requests
 from django.conf import settings
+import hmac
 from rest_framework.views import APIView
 from rest_framework.response import Response
 from rest_framework import status, permissions
@@ -36,6 +37,11 @@ class TelegramWebhookView(APIView):
     permission_classes = [permissions.AllowAny]
 
     def post(self, request):
+        expected_secret = getattr(settings, "TELEGRAM_WEBHOOK_SECRET", "")
+        provided_secret = request.headers.get("X-Telegram-Bot-Api-Secret-Token", "")
+        if not expected_secret or not hmac.compare_digest(provided_secret, expected_secret):
+            return Response({"status": "unauthorized"}, status=403)
+
         update = request.data
         token = settings.TELEGRAM_BOT_TOKEN
         base_url = f"https://api.telegram.org/bot{token}"
