@@ -10,6 +10,17 @@ class AgentSettings(models.Model):
 
     is_globally_active = models.BooleanField(default=True)
     auto_reply_mode = models.CharField(max_length=15, choices=AUTO_REPLY_CHOICES, default='full_auto')
+    
+    # Analytics & Meta Integration Fields
+    fb_page_url = models.URLField(max_length=500, default="https://www.facebook.com/profile.php?id=61591261844925")
+    fb_page_id = models.CharField(max_length=100, default="61591261844925")
+    fb_followers_override = models.IntegerField(default=1250)
+    fb_reach_override = models.IntegerField(default=4800)
+    ig_page_url = models.URLField(max_length=500, default="https://instagram.com/dummy")
+    ig_followers_override = models.IntegerField(default=0)
+    is_meta_connected = models.BooleanField(default=True)
+    is_google_connected = models.BooleanField(default=False)
+    
     updated_at = models.DateTimeField(auto_now=True)
 
     def save(self, *args, **kwargs):

@@ -3,6 +3,7 @@ from rest_framework.routers import DefaultRouter
 from catalog.admin_views import AdminProductViewSet, AdminCategoryViewSet
 from orders.admin_views import AdminOrderViewSet
 from . import admin_views
+from . import analytics_views
 
 router = DefaultRouter()
 router.register(r'products', AdminProductViewSet, basename='admin-product')
@@ -21,4 +22,11 @@ urlpatterns = [
     path('agent-settings/', admin_views.AgentSettingsView.as_view(), name='admin-agent-settings'),
     path('agent/product-images/', admin_views.AgentProductImageView.as_view(), name='admin-agent-product-images'),
     path('agent/product-draft/', admin_views.AgentProductDraftView.as_view(), name='admin-agent-product-draft'),
+    
+    # Analytics Dashboard Endpoints
+    path('analytics/overview/', analytics_views.AnalyticsOverviewView.as_view(), name='admin-analytics-overview'),
+    path('analytics/web/', analytics_views.AnalyticsWebView.as_view(), name='admin-analytics-web'),
+    path('analytics/meta/', analytics_views.AnalyticsMetaView.as_view(), name='admin-analytics-meta'),
+    path('analytics/settings/', analytics_views.AnalyticsSettingsView.as_view(), name='admin-analytics-settings'),
+    path('analytics/settings/update/', analytics_views.AnalyticsSettingsUpdateView.as_view(), name='admin-analytics-settings-update'),
 ]
