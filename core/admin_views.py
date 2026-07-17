@@ -94,13 +94,11 @@ class ChatAdminViewSet(viewsets.ModelViewSet):
     def activate_agent(self, request, pk=None):
         conversation = self.get_object()
         conversation.is_agent_active = True
-        conversation.force_agent_auto = True
         conversation.status = 'open'
         conversation.escalation_note = ''
         conversation.save(
             update_fields=[
                 'is_agent_active',
-                'force_agent_auto',
                 'status',
                 'escalation_note',
                 'last_message_at',

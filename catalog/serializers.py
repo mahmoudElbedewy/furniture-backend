@@ -6,7 +6,7 @@ from .models import (
     Review,
     ProductShippingRate,
     Favorite,
-    ProductVariant, 
+    ProductVariant,
 )
 
 
@@ -66,6 +66,7 @@ class ProductSerializer(serializers.ModelSerializer):
     reviews = serializers.SerializerMethodField()
     shipping_rates = serializers.SerializerMethodField()
     shipping_summary = serializers.SerializerMethodField()
+    variants = serializers.SerializerMethodField()
 
     class Meta:
         model = Product
@@ -89,35 +90,22 @@ class ProductSerializer(serializers.ModelSerializer):
             "reviews",
             "shipping_rates",
             "shipping_summary",
+            "variants",
         )
 
     def get_images(self, obj):
-        # obj.images is prefetched in the view's queryset (prefetch_related),
-        # so .all() here reads from the cache instead of firing a query
-        # per product.
         imgs = obj.images.all()
         return ProductImageSerializer(imgs, many=True).data
 
     def get_reviews(self, obj):
-        # obj.reviews is prefetched and already ordered by -created_at via
-        # Prefetch(queryset=Review.objects.order_by("-created_at")) in the
-        # view. Calling .order_by() again here would not match that cached
-        # queryset and would silently trigger a brand new DB query per
-        # product instead of reusing the prefetch - so we only slice, in
-        # Python, on the already-ordered cached results.
         revs = list(obj.reviews.all())[:5]
         return ReviewSerializer(revs, many=True).data
 
     def get_shipping_rates(self, obj):
-        # obj.shipping_rates is prefetched (with governorate/area
-        # select_related) in the view's queryset.
         rates = obj.shipping_rates.all()
         return ProductShippingRateSerializer(rates, many=True).data
 
     def get_shipping_summary(self, obj):
-        """Create a creative, formatted shipping summary for display"""
-        # Reuses the same prefetched cache as get_shipping_rates - no
-        # extra query.
         rates = obj.shipping_rates.all()
         if not rates:
             return {
@@ -136,28 +124,21 @@ class ProductSerializer(serializers.ModelSerializer):
                 ),
             }
 
-        # Group by price
         free_areas = []
         paid_areas = {}
-
         for rate in rates:
             location = f"{rate.governorate.name}"
             if rate.area:
                 location += f" - {rate.area.name}"
-
             if rate.price == 0:
                 free_areas.append(location)
             else:
-                if rate.price not in paid_areas:
-                    paid_areas[rate.price] = []
-                paid_areas[rate.price].append(location)
+                paid_areas.setdefault(rate.price, []).append(location)
 
-        # Format paid areas by price
-        paid_shipping_list = []
-        for price, areas in sorted(paid_areas.items()):
-            paid_shipping_list.append(
-                {"price": float(price), "areas": areas, "count": len(areas)}
-            )
+        paid_shipping_list = [
+            {"price": float(price), "areas": areas, "count": len(areas)}
+            for price, areas in sorted(paid_areas.items())
+        ]
 
         return {
             "free_shipping_areas": free_areas,
@@ -174,27 +155,27 @@ class ProductSerializer(serializers.ModelSerializer):
         }
 
     def _generate_shipping_message(self, free_areas, paid_areas, default_price):
-        """Generate a friendly Arabic message about shipping"""
         messages = []
-
         if free_areas:
             if len(free_areas) <= 3:
                 messages.append(f"شحن مجاني لـ: {', '.join(free_areas)}")
             else:
                 messages.append(f"شحن مجاني لـ {len(free_areas)} منطقة")
-
         if paid_areas:
             for item in paid_areas:
-                if item["count"] <= 3:
-                    areas_text = ", ".join(item["areas"])
-                else:
-                    areas_text = f"{item['count']} منطقة"
+                areas_text = (
+                    ", ".join(item["areas"])
+                    if item["count"] <= 3
+                    else f"{item['count']} منطقة"
+                )
                 messages.append(f"شحن {item['price']} جنيه لـ: {areas_text}")
-
         if default_price and default_price > 0:
             messages.append(f"السعر الافتراضي للشحن: {default_price} جنيه")
-
         return " | ".join(messages) if messages else "تواصل معنا لمعرفة تفاصيل الشحن"
+
+    def get_variants(self, obj):
+        variants = [v for v in obj.variants.all() if v.is_available]
+        return ProductVariantSerializer(variants, many=True).data
 
 
 class FavoriteSerializer(serializers.ModelSerializer):
@@ -222,28 +203,3 @@ class ProductVariantSerializer(serializers.ModelSerializer):
     class Meta:
         model = ProductVariant
         fields = ("id", "size_name", "price", "is_available")
-
-
-class ProductSerializer(serializers.ModelSerializer):
-    category_name = serializers.CharField(source="category.name", read_only=True)
-    images = serializers.SerializerMethodField()
-    reviews = serializers.SerializerMethodField()
-    shipping_rates = serializers.SerializerMethodField()
-    shipping_summary = serializers.SerializerMethodField()
-    variants = serializers.SerializerMethodField()      # جديد
-
-    class Meta:
-        model = Product
-        fields = (
-            "id", "title", "slug", "description", "material", "color",
-            "dimensions", "final_price", "is_available", "category_name",
-            "requires_deposit", "deposit_amount", "deposit_note",
-            "default_shipping_price", "ships_nationwide", "images",
-            "reviews", "shipping_rates", "shipping_summary",
-            "variants",     
-        )
-
-
-    def get_variants(self, obj):
-        variants = [v for v in obj.variants.all() if v.is_available]
-        return ProductVariantSerializer(variants, many=True).data
