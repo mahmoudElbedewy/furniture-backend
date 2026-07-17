@@ -1,6 +1,6 @@
 from rest_framework import serializers
 from .models import Order, OrderItem, Commission
-from catalog.models import Product
+from catalog.models import Product, ProductVariant  # جديد
 
 
 class OrderItemSerializer(serializers.ModelSerializer):
@@ -8,18 +8,44 @@ class OrderItemSerializer(serializers.ModelSerializer):
         queryset=Product.objects.filter(is_available=True), source="product"
     )
     product_title = serializers.CharField(source="product.title", read_only=True)
+    variant_id = serializers.PrimaryKeyRelatedField(
+        queryset=ProductVariant.objects.filter(is_available=True),
+        source="variant",
+        required=False,
+        allow_null=True,
+    )
 
     class Meta:
         model = OrderItem
         fields = (
             "product_id",
             "product_title",
+            "variant_id",
+            "variant_size_name",
             "quantity",
             "price_at_order_time",
             "shipping_price",
             "shipping_location",
         )
-        read_only_fields = ("price_at_order_time",)
+        read_only_fields = ("price_at_order_time", "variant_size_name")
+
+    def validate(self, attrs):
+        product = attrs.get("product")
+        variant = attrs.get("variant")
+
+        if (
+            product
+            and product.variants.filter(is_available=True).exists()
+            and not variant
+        ):
+            raise serializers.ValidationError(
+                {"variant_id": "برجاء اختيار المقاس المطلوب لهذا المنتج."}
+            )
+        if variant and product and variant.product_id != product.id:
+            raise serializers.ValidationError(
+                {"variant_id": "المقاس المختار لا ينتمي لهذا المنتج."}
+            )
+        return attrs
 
 
 class OrderSerializer(serializers.ModelSerializer):
@@ -85,7 +111,6 @@ class OrderSerializer(serializers.ModelSerializer):
             from django.utils import timezone
 
             commission = getattr(instance, "commission", None)
-
             if status == "commission_settled" and commission:
                 commission.is_settled = True
                 commission.settled_at = timezone.now()
@@ -102,13 +127,24 @@ class OrderSerializer(serializers.ModelSerializer):
             total_deposit = validated_data.pop("_total_deposit", 0)
             items_data = validated_data.pop("items")
             shipping_price = validated_data.pop("shipping_price", 0)
+
             if shipping_price is not None:
                 from decimal import Decimal
+
                 if not isinstance(shipping_price, Decimal):
                     shipping_price = Decimal(str(shipping_price))
 
+            def item_unit_price(item_data):
+                variant = item_data.get("variant")
+                return variant.price if variant else item_data["product"].final_price
+
             total = (
-                sum([item["product"].final_price * item.get("quantity", 1) for item in items_data])
+                sum(
+                    [
+                        item_unit_price(item) * item.get("quantity", 1)
+                        for item in items_data
+                    ]
+                )
                 + shipping_price
             )
 
@@ -126,15 +162,22 @@ class OrderSerializer(serializers.ModelSerializer):
 
             commission_total = 0
             for item_data in items_data:
+                variant = item_data.get("variant")
+                unit_price = item_unit_price(item_data)
+
                 OrderItem.objects.create(
                     order=order,
                     product=item_data["product"],
+                    variant=variant,
+                    variant_size_name=variant.size_name if variant else None,
                     quantity=item_data.get("quantity", 1),
-                    price_at_order_time=item_data["product"].final_price,
+                    price_at_order_time=unit_price,
                     shipping_price=item_data.get("shipping_price", 0),
                     shipping_location=item_data.get("shipping_location", ""),
                 )
-                commission_total += item_data["product"].commission_value * item_data.get("quantity", 1)
+                commission_total += item_data[
+                    "product"
+                ].commission_value * item_data.get("quantity", 1)
 
             if commission_total > 0:
                 Commission.objects.create(order=order, amount=commission_total)
@@ -143,6 +186,7 @@ class OrderSerializer(serializers.ModelSerializer):
             return order
         except Exception as e:
             import traceback
+
             print(f"Error creating order: {e}")
             print(traceback.format_exc())
             raise
@@ -151,7 +195,6 @@ class OrderSerializer(serializers.ModelSerializer):
         """Send Telegram notification with order details"""
         try:
             from telegram_bot.services import notify_admin
-
             from html import escape
 
             lines = []
@@ -163,9 +206,15 @@ class OrderSerializer(serializers.ModelSerializer):
                 description = escape(product.description or "لا يوجد وصف")
                 item_shipping = item.shipping_price or 0
                 item_location = escape(item.shipping_location or "غير محدد")
+                size_line = (
+                    f"📏 المقاس: {escape(item.variant_size_name)}\n"
+                    if item.variant_size_name
+                    else ""
+                )
                 lines.append(
                     f"━━━━━━━━━━━━━━━━━━\n"
                     f"📦 <b>{product.title}</b> x{item.quantity}\n"
+                    f"{size_line}"
                     f"📝 الوصف: {description}\n"
                     f"💰 السعر قبل العمولة: {base} ج\n"
                     f"💵 العمولة: {commission} ج\n"
@@ -205,5 +254,4 @@ class OrderSerializer(serializers.ModelSerializer):
 
             notify_admin("new_order", order.id, message, buttons=buttons)
         except Exception as e:
-            # Log error but don't fail the order creation
             print(f"Failed to send Telegram notification: {e}")

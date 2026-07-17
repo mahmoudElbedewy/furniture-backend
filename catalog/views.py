@@ -88,6 +88,7 @@ class ProductListView(generics.ListAPIView):
             .select_related("category")
             .prefetch_related(
                 "images",
+                "variants",
                 Prefetch("reviews", queryset=Review.objects.order_by("-created_at")),
                 Prefetch(
                     "shipping_rates",
@@ -165,6 +166,7 @@ class ProductDetailView(generics.RetrieveAPIView):
             .select_related("category")
             .prefetch_related(
                 "images",
+                "variants",
                 Prefetch("reviews", queryset=Review.objects.order_by("-created_at")),
                 Prefetch(
                     "shipping_rates",

@@ -1,5 +1,5 @@
 from django.contrib import admin
-from .models import Category, Governorate, Area, Product, ProductImage, ProductShippingRate, Review
+from .models import Category, Governorate, Area, Product, ProductImage, ProductShippingRate, Review ,ProductVariant
 
 
 @admin.register(Category)
@@ -34,6 +34,9 @@ class ProductShippingRateInline(admin.TabularInline):
     extra = 1
     autocomplete_fields = ('governorate', 'area')
 
+class ProductVariantInline(admin.TabularInline):
+    model = ProductVariant
+    extra = 1
 
 @admin.register(Product)
 class ProductAdmin(admin.ModelAdmin):
@@ -43,7 +46,7 @@ class ProductAdmin(admin.ModelAdmin):
     prepopulated_fields = {'slug': ('title',)}
     autocomplete_fields = ('supplier', 'category')
     readonly_fields = ('final_price', 'views_count', 'orders_count', 'created_at', 'updated_at')
-    inlines = (ProductImageInline, ProductShippingRateInline)
+    inlines = (ProductImageInline, ProductVariantInline, ProductShippingRateInline)
 
 
 @admin.register(Review)
@@ -52,3 +55,4 @@ class ReviewAdmin(admin.ModelAdmin):
     list_filter = ('rating', 'is_verified_purchase')
     search_fields = ('customer_name', 'comment')
     autocomplete_fields = ('product',)
+

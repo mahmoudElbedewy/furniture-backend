@@ -6,6 +6,7 @@ from .models import (
     Review,
     ProductShippingRate,
     Favorite,
+    ProductVariant, 
 )
 
 
@@ -215,3 +216,34 @@ class FavoriteSerializer(serializers.ModelSerializer):
             "created_at",
         )
         read_only_fields = ("created_at",)
+
+
+class ProductVariantSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = ProductVariant
+        fields = ("id", "size_name", "price", "is_available")
+
+
+class ProductSerializer(serializers.ModelSerializer):
+    category_name = serializers.CharField(source="category.name", read_only=True)
+    images = serializers.SerializerMethodField()
+    reviews = serializers.SerializerMethodField()
+    shipping_rates = serializers.SerializerMethodField()
+    shipping_summary = serializers.SerializerMethodField()
+    variants = serializers.SerializerMethodField()      # جديد
+
+    class Meta:
+        model = Product
+        fields = (
+            "id", "title", "slug", "description", "material", "color",
+            "dimensions", "final_price", "is_available", "category_name",
+            "requires_deposit", "deposit_amount", "deposit_note",
+            "default_shipping_price", "ships_nationwide", "images",
+            "reviews", "shipping_rates", "shipping_summary",
+            "variants",     
+        )
+
+
+    def get_variants(self, obj):
+        variants = [v for v in obj.variants.all() if v.is_available]
+        return ProductVariantSerializer(variants, many=True).data

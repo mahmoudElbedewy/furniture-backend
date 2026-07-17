@@ -56,13 +56,22 @@ class Order(models.Model):
 class OrderItem(models.Model):
     order = models.ForeignKey(Order, on_delete=models.CASCADE, related_name="items")
     product = models.ForeignKey(Product, on_delete=models.PROTECT)
+    variant = models.ForeignKey(
+        "catalog.ProductVariant",
+        on_delete=models.PROTECT,
+        null=True,
+        blank=True,
+        related_name="order_items",
+    )  
+    variant_size_name = models.CharField(max_length=100, blank=True, null=True)  # نسخة نصية ثابتة وقت الطلب
     quantity = models.PositiveIntegerField(default=1)
     price_at_order_time = models.DecimalField(max_digits=10, decimal_places=2)
     shipping_price = models.DecimalField(max_digits=10, decimal_places=2, default=0)
     shipping_location = models.CharField(max_length=200, blank=True, null=True)
 
     def __str__(self):
-        return f"{self.order.order_number} - {self.product.title} x{self.quantity}"
+        size = f" ({self.variant_size_name})" if self.variant_size_name else ""
+        return f"{self.order.order_number} - {self.product.title}{size} x{self.quantity}"
 
 
 class OrderStatusLog(models.Model):

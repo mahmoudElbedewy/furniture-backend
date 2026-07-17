@@ -6,7 +6,8 @@ class OrderItemInline(admin.TabularInline):
     model = OrderItem
     extra = 0
     autocomplete_fields = ('product',)
-    readonly_fields = ('price_at_order_time',)
+    readonly_fields = ('price_at_order_time', 'variant_size_name')
+    fields = ('product', 'variant', 'variant_size_name', 'quantity', 'price_at_order_time', 'shipping_price', 'shipping_location')
 
 
 class OrderStatusLogInline(admin.TabularInline):
