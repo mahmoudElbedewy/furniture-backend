@@ -20,10 +20,12 @@ EXTRACTION_PROMPT = """أنت أداة استخراج بيانات منتجات 
 - "عمولة: 350"
 - أو أي رقم بجانب كلمة commission/عمولة
 
+المقاسات (variants): لو المنتج له أكتر من مقاس بسعر مختلف (مثلاً "150x200: 3500 جنيه، 180x200: 4000 جنيه")، استخرج كل مقاس وسعره في variants كـ list. سعر كل مقاس هو السعر النهائي الكامل بتاعه (العمولة متضافاش عليه تاني). لو المنتج بسعر واحد بس من غير مقاسات متعددة، سيب variants فاضية [].
+
 أمثلة:
 - لو النص فيه "commission_value : 350" → استخرج 350
 - لو النص فيه "Base price: 2600, commission_value : 350" → استخرج 350
-- لو النص فيه "عمولة: 350" → استخرج 350
+- لو النص فيه "مقاس 150: 3500 / مقاس 180: 4000" → variants: [{{"size_name": "150", "price": 3500}}, {{"size_name": "180", "price": 4000}}]
 
 لو مش موجودة نهائياً في النص، اتركها null.
 
@@ -44,6 +46,7 @@ EXTRACTION_PROMPT = """أنت أداة استخراج بيانات منتجات 
   "ships_nationwide": true/false,
   "default_shipping_price": رقم أو null,
   "shipping_rates": [{{"governorate": "اسم المحافظة", "area": "اسم المنطقة أو null", "price": رقم}}],
+  "variants": [{{"size_name": "اسم المقاس", "price": رقم}}],
   "description": "وصف قصير من النص أو null",
   "images": [{{"url": "رابط الصورة", "is_primary": true/false}}]
 }}
@@ -90,6 +93,25 @@ def describe_images(image_urls):
 def _get_missing_fields(data: dict) -> list:
     return [f for f in REQUIRED_FIELDS if not data.get(f)]
 
+def _normalize_variants(data: dict) -> list:
+    raw_variants = data.get("variants")
+    if not isinstance(raw_variants, list):
+        return []
+
+    normalized = []
+    for item in raw_variants:
+        if not isinstance(item, dict):
+            continue
+        size_name = item.get("size_name")
+        price = item.get("price")
+        if not size_name or price in (None, ""):
+            continue
+        try:
+            price = float(str(price).replace(",", ""))
+        except (TypeError, ValueError):
+            continue
+        normalized.append({"size_name": str(size_name).strip(), "price": price})
+    return normalized
 
 def extract_product_data(
     raw_text: str, image_urls=None, previous_payload=None, correction_text=None
@@ -120,6 +142,7 @@ def extract_product_data(
     try:
         data = json.loads(content)
         data = _cross_check_commission(raw_text, data)
+        data["variants"] = _normalize_variants(data)   # <-- جديد
     except json.JSONDecodeError:
         return {
             "_raw_extraction_error": content,

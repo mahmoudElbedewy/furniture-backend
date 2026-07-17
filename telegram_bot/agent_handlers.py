@@ -6,6 +6,7 @@ from catalog.models import (
     ProductShippingRate,
     Governorate,
     Area,
+    ProductVariant,
 )
 from suppliers.models import Supplier
 from django.utils.text import slugify
@@ -85,6 +86,21 @@ def handle_agent_action_approval(request_id: str):
                 ProductShippingRate.objects.create(
                     product=product, governorate=gov, area=area_obj, price=price
                 )
+        for idx, variant in enumerate(payload.get("variants", []) or []):
+            size_name = variant.get("size_name")
+            price = variant.get("price")
+            if not size_name or price in (None, ""):
+                continue
+            try:
+                price_value = float(price)
+            except (TypeError, ValueError):
+                continue
+            ProductVariant.objects.create(
+                product=product,
+                size_name=str(size_name).strip(),
+                price=price_value,
+                display_order=idx,
+            )
 
         req.status = "approved"
         req.save()
