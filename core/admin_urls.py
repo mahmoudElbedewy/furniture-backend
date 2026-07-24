@@ -25,9 +25,12 @@ urlpatterns = [
     
     # Analytics Dashboard Endpoints
     path('analytics/overview/', analytics_views.AnalyticsOverviewView.as_view(), name='admin-analytics-overview'),
+    path('analytics/audience/', analytics_views.AnalyticsAudienceView.as_view(), name='admin-analytics-audience'),
+    path('analytics/content/', analytics_views.AnalyticsContentView.as_view(), name='admin-analytics-content'),
+    path('analytics/web-traffic/', analytics_views.AnalyticsWebTrafficView.as_view(), name='admin-analytics-web-traffic'),
     path('analytics/web/', analytics_views.AnalyticsWebView.as_view(), name='admin-analytics-web'),
     path('analytics/meta/', analytics_views.AnalyticsMetaView.as_view(), name='admin-analytics-meta'),
+    path('analytics/posts/<str:post_id>/drilldown/', analytics_views.AnalyticsPostDrilldownView.as_view(), name='admin-analytics-drilldown'),
     path('analytics/settings/', analytics_views.AnalyticsSettingsView.as_view(), name='admin-analytics-settings'),
-    path('analytics/settings/update/', analytics_views.AnalyticsSettingsUpdateView.as_view(), name='admin-analytics-settings-update'),
-    path('analytics/sync/', analytics_views.AnalyticsSyncView.as_view(), name='admin-analytics-sync'),
+    path('analytics/sync-now/', analytics_views.AnalyticsSyncNowView.as_view(), name='admin-analytics-sync-now'),
 ]

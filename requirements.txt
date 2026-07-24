@@ -163,3 +163,4 @@ youtube-transcript-api==1.2.4
 zope.interface==8.4
 zstandard==0.25.0
 whitenoise==6.8.2
+google-analytics-data>=0.18.0

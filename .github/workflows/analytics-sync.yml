@@ -1,0 +1,13 @@
+name: Analytics Sync
+on:
+  schedule:
+    - cron: '*/30 * * * *'
+  workflow_dispatch: {}
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Trigger sync
+        run: |
+          curl -X POST "${{ secrets.HF_SPACE_URL }}/api/analytics/bridge/sync/" \
+            -H "X-Bridge-Secret: ${{ secrets.TELEGRAM_BRIDGE_SECRET }}"

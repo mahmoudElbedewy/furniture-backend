@@ -4,6 +4,8 @@ from django.conf import settings
 from django.conf.urls.static import static
 from drf_spectacular.views import SpectacularAPIView, SpectacularSwaggerView
 from core.track_views import TrackVisitView
+from core import analytics_bridge_views
+
 
 urlpatterns = [
     path('admin/', admin.site.urls),
@@ -17,6 +19,8 @@ urlpatterns = [
     path('api/admin/', include('core.admin_urls')),
     path('api/telegram/', include('telegram_bot.urls')),
     path('api/track-visit/', TrackVisitView.as_view(), name='track-visit'),
+    path('api/analytics/bridge/sync/', analytics_bridge_views.trigger_sync),
+
 ]
 
 if settings.DEBUG:
