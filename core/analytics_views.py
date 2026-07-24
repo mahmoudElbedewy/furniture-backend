@@ -175,21 +175,21 @@ class AnalyticsOverviewView(views.APIView):
         month_start = end.replace(day=1)
         first_month = (month_start - timedelta(days=365)).replace(day=1)
         ga_months = {
-            row['month'].date(): row['sessions'] or 0
+            (row['month'].date() if hasattr(row['month'], 'date') else row['month']): row['sessions'] or 0
             for row in GADailyTraffic.objects.filter(date__gte=first_month, date__lte=end)
             .annotate(month=TruncMonth('date'))
             .values('month')
             .annotate(sessions=Sum('sessions'))
         }
         site_months = {
-            row['month'].date(): row['visits'] or 0
+            (row['month'].date() if hasattr(row['month'], 'date') else row['month']): row['visits'] or 0
             for row in WebPageVisit.objects.filter(created_at__date__gte=first_month, created_at__date__lte=end)
             .annotate(month=TruncMonth('created_at'))
             .values('month')
             .annotate(visits=Count('id'))
         }
         reach_months = {
-            row['month'].date(): row['reach'] or 0
+            (row['month'].date() if hasattr(row['month'], 'date') else row['month']): row['reach'] or 0
             for row in FacebookPostMetric.objects.filter(published_at__date__gte=first_month, published_at__date__lte=end)
             .annotate(month=TruncMonth('published_at'))
             .values('month')
@@ -588,6 +588,17 @@ class AnalyticsWebView(views.APIView):
             'bounceRateSparkline': [{'v': round(t.bounce_rate, 1)} for t in ga.order_by('date')][-7:] if use_ga else [],
             'sessionDurationSparkline': [{'v': t.avg_session_duration_seconds} for t in ga.order_by('date')][-7:] if use_ga else [],
             'totalSessionsSparkline': session_spark,
+            'trafficSources': (
+                [
+                    {'name': 'Organic', 'nameAr': 'بحث عضوي', 'value': ga.aggregate(v=Sum('source_organic'))['v'] or 0, 'color': '#6366f1'},
+                    {'name': 'Social', 'nameAr': 'وسائل التواصل', 'value': ga.aggregate(v=Sum('source_social'))['v'] or 0, 'color': '#f472b6'},
+                    {'name': 'Direct', 'nameAr': 'مباشر', 'value': ga.aggregate(v=Sum('source_direct'))['v'] or 0, 'color': '#34d399'},
+                    {'name': 'Referral', 'nameAr': 'إحالات', 'value': ga.aggregate(v=Sum('source_referral'))['v'] or 0, 'color': '#fb923c'},
+                ] if use_ga else [
+                    {'name': r['referrer_type'].capitalize(), 'nameAr': {'organic': 'بحث عضوي', 'social': 'وسائل التواصل', 'direct': 'مباشر', 'referral': 'إحالات'}.get(r['referrer_type'], r['referrer_type']), 'value': r['cnt'], 'color': {'organic': '#6366f1', 'social': '#f472b6', 'direct': '#34d399', 'referral': '#fb923c'}.get(r['referrer_type'], '#94a3b8')}
+                    for r in visits.values('referrer_type').annotate(cnt=Count('id'))
+                ] if total_sessions > 0 else []
+            ),
             'dataAvailability': {
                 'totalSessions': _availability(
                     final_sessions > 0,
@@ -899,8 +910,19 @@ class AnalyticsSyncNowView(views.APIView):
 
         results = sync_all()
         ok = any(result.get('ok') for result in results.values())
+        fb_err = results.get('facebook', {}).get('error')
+        ga_err = results.get('ga4', {}).get('error')
+        err_msg = fb_err or ga_err or 'فشلت المزامنة'
+        if 'pages_read_engagement' in str(err_msg).lower() or 'permission' in str(err_msg).lower():
+            err_msg = 'فشلت المزامنة: التوكن ينقصه صلاحية pages_read_engagement. اختر هذه الصلاحية في Graph API Explorer عند إنشاء التوكن.'
+        elif 'token' in str(err_msg).lower() or 'expired' in str(err_msg).lower():
+            err_msg = f'فشلت المزامنة: رمز الوصول (Access Token) غير صالح أو انتهت صلاحيته ({err_msg})'
+        elif 'missing' in str(err_msg).lower():
+            err_msg = 'فشلت المزامنة: يرجى إضافة Access Token و Page ID أولاً في الإعدادات.'
+
         return Response({
-            'message': 'Sync complete' if ok else 'Sync finished with missing configuration or provider errors',
+            'message': 'تمت المزامنة بنجاح ✅' if ok else 'فشلت المزامنة',
+            'error': None if ok else err_msg,
             'ok': ok,
             'results': results,
         }, status=200 if ok else 400)

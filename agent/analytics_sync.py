@@ -61,10 +61,12 @@ def sync_facebook(settings: AgentSettings):
                    'insights.metric(post_impressions,post_impressions_unique,post_clicks,post_video_views)',
          'limit': 25},
     )
-    if posts and posts.get('error'):
-        settings.is_meta_connected = False
-        settings.save(update_fields=['is_meta_connected'])
-        return {'ok': False, 'error': posts['error']}
+    if not posts or posts.get('error'):
+        posts = _graph_get(
+            f'{page_id}/published_posts', page_token,
+            {'fields': 'id,message,full_picture,permalink_url,created_time',
+             'limit': 25},
+        )
 
     synced_posts = 0
     if posts and 'data' in posts:
@@ -94,9 +96,9 @@ def sync_facebook(settings: AgentSettings):
                 post_id=p['id'],
                 defaults=dict(
                     message=(p.get('message') or '')[:2000],
-                    image_url=p.get('full_picture', '') or '',
-                    permalink_url=link,
-                    utm_campaign=utm_campaign,
+                    image_url=(p.get('full_picture') or '')[:500],
+                    permalink_url=link[:500],
+                    utm_campaign=utm_campaign[:150],
                     reach=reach, impressions=impressions,
                     likes=likes, comments=comments, shares=shares,
                     clicks=clicks, video_views=video_views,
