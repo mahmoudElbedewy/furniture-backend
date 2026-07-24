@@ -29,4 +29,5 @@ urlpatterns = [
     path('analytics/meta/', analytics_views.AnalyticsMetaView.as_view(), name='admin-analytics-meta'),
     path('analytics/settings/', analytics_views.AnalyticsSettingsView.as_view(), name='admin-analytics-settings'),
     path('analytics/settings/update/', analytics_views.AnalyticsSettingsUpdateView.as_view(), name='admin-analytics-settings-update'),
+    path('analytics/sync/', analytics_views.AnalyticsSyncView.as_view(), name='admin-analytics-sync'),
 ]

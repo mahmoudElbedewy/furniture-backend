@@ -20,6 +20,8 @@ class AgentSettings(models.Model):
     ig_followers_override = models.IntegerField(default=0)
     is_meta_connected = models.BooleanField(default=True)
     is_google_connected = models.BooleanField(default=False)
+    meta_access_token = models.TextField(blank=True, default='')
+    last_meta_sync = models.DateTimeField(null=True, blank=True)
     
     updated_at = models.DateTimeField(auto_now=True)
 
@@ -59,3 +61,42 @@ class AgentActionRequest(models.Model):
 
     def __str__(self):
         return f"{self.get_action_type_display()} - {self.status}"
+
+
+class MetaPostCache(models.Model):
+    post_id = models.CharField(max_length=100, unique=True)
+    platform = models.CharField(max_length=20, choices=[('facebook', 'Facebook'), ('instagram', 'Instagram')])
+    caption = models.TextField(blank=True, default='')
+    image_url = models.URLField(max_length=500, blank=True, default='')
+    likes = models.IntegerField(default=0)
+    comments = models.IntegerField(default=0)
+    shares = models.IntegerField(default=0)
+    engagement_rate = models.FloatField(default=0.0)
+    posted_at = models.DateTimeField(null=True, blank=True)
+    synced_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        ordering = ['-posted_at']
+
+    def __str__(self):
+        return f'{self.platform}: {self.post_id}'
+
+class WebPageVisit(models.Model):
+    path = models.CharField(max_length=500)
+    session_key = models.CharField(max_length=100, blank=True, default='')
+    referrer_type = models.CharField(
+        max_length=20,
+        choices=[('direct', 'Direct'), ('social', 'Social'), ('organic', 'Organic'), ('referral', 'Referral')],
+        default='direct'
+    )
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        ordering = ['-created_at']
+        indexes = [
+            models.Index(fields=['path', 'created_at']),
+            models.Index(fields=['referrer_type']),
+        ]
+
+    def __str__(self):
+        return f'{self.path} @ {self.created_at}'
