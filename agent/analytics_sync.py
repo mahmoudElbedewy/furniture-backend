@@ -12,7 +12,7 @@ GRAPH_API_BASE = 'https://graph.facebook.com/v25.0'
 def _graph_get(endpoint, token, params=None):
     params = {**(params or {}), 'access_token': token}
     try:
-        r = requests.get(f'{GRAPH_API_BASE}/{endpoint}', params=params, timeout=15)
+        r = requests.get(f'{GRAPH_API_BASE}/{endpoint}', params=params, timeout=30)
         data = r.json()
         if r.status_code == 200 and 'error' not in data:
             return data
@@ -20,6 +20,8 @@ def _graph_get(endpoint, token, params=None):
         return {'error': error}
     except requests.RequestException as exc:
         return {'error': str(exc)}
+
+
 
 
 def sync_facebook(settings: AgentSettings):
@@ -31,10 +33,9 @@ def sync_facebook(settings: AgentSettings):
     # Resolve page token
     accounts = _graph_get('me/accounts', token)
     page_token = token
-    if accounts and accounts.get('error'):
-        settings.is_meta_connected = False
-        settings.save(update_fields=['is_meta_connected'])
-        return {'ok': False, 'error': accounts['error']}
+    
+    # If accounts returns an error (e.g. if the token is already a Page Access Token), 
+    # we don't fail immediately. We will test the token directly on the page_info endpoint.
     if accounts and 'data' in accounts:
         for page in accounts['data']:
             if str(page.get('id')) == str(page_id):
