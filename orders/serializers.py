@@ -27,7 +27,7 @@ class OrderItemSerializer(serializers.ModelSerializer):
             "shipping_price",
             "shipping_location",
         )
-        read_only_fields = ("price_at_order_time", "variant_size_name")
+        read_only_fields = ("price_at_order_time", "variant_size_name", "shipping_price")
 
     def validate(self, attrs):
         product = attrs.get("product")
@@ -72,7 +72,7 @@ class OrderSerializer(serializers.ModelSerializer):
             "deposit_proof_image",
             "deposit_amount",
         )
-        read_only_fields = ("order_number", "total_price", "deposit_amount")
+        read_only_fields = ("order_number", "total_price", "deposit_amount", "shipping_price")
 
     def validate(self, attrs):
         items = attrs.get("items", [])
@@ -126,17 +126,39 @@ class OrderSerializer(serializers.ModelSerializer):
         try:
             total_deposit = validated_data.pop("_total_deposit", 0)
             items_data = validated_data.pop("items")
-            shipping_price = validated_data.pop("shipping_price", 0)
-
-            if shipping_price is not None:
-                from decimal import Decimal
-
-                if not isinstance(shipping_price, Decimal):
-                    shipping_price = Decimal(str(shipping_price))
+            
+            validated_data.pop("shipping_price", None)
 
             def item_unit_price(item_data):
                 variant = item_data.get("variant")
                 return variant.price if variant else item_data["product"].final_price
+
+            def get_item_shipping_price(item_data):
+                product = item_data["product"]
+                shipping_location = item_data.get("shipping_location", "")
+                if not shipping_location:
+                    return product.default_shipping_price or 0
+                
+                parts = [p.strip() for p in shipping_location.split(" - ", 1)]
+                gov_name = parts[0]
+                area_name = parts[1] if len(parts) > 1 else None
+                
+                rate_qs = product.shipping_rates.filter(governorate__name=gov_name)
+                if area_name:
+                    rate_qs = rate_qs.filter(area__name=area_name)
+                else:
+                    rate_qs = rate_qs.filter(area__isnull=True)
+                
+                rate = rate_qs.first()
+                if rate:
+                    return rate.price
+                return product.default_shipping_price or 0
+
+            total_shipping_price = 0
+            for item in items_data:
+                unit_shipping = get_item_shipping_price(item)
+                item["_calculated_shipping_price"] = unit_shipping
+                total_shipping_price += unit_shipping * item.get("quantity", 1)
 
             total = (
                 sum(
@@ -145,12 +167,12 @@ class OrderSerializer(serializers.ModelSerializer):
                         for item in items_data
                     ]
                 )
-                + shipping_price
+                + total_shipping_price
             )
 
             order = Order.objects.create(
                 total_price=total,
-                shipping_price=shipping_price,
+                shipping_price=total_shipping_price,
                 deposit_amount=total_deposit,
                 **validated_data,
             )
@@ -172,7 +194,7 @@ class OrderSerializer(serializers.ModelSerializer):
                     variant_size_name=variant.size_name if variant else None,
                     quantity=item_data.get("quantity", 1),
                     price_at_order_time=unit_price,
-                    shipping_price=item_data.get("shipping_price", 0),
+                    shipping_price=item_data.get("_calculated_shipping_price", 0),
                     shipping_location=item_data.get("shipping_location", ""),
                 )
                 commission_total += item_data[
