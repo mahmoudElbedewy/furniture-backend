@@ -88,8 +88,13 @@ class MetaOAuthCallbackView(views.APIView):
         if not code or not _verify_oauth_state(state):
             return redirect(_settings_redirect("error", "invalid_or_expired_state"))
 
+        session = requests.Session()
+        adapter = requests.adapters.HTTPAdapter(max_retries=2)
+        session.mount("https://", adapter)
+        _timeout = 30
+
         try:
-            token_resp = requests.get(
+            token_resp = session.get(
                 f"https://graph.facebook.com/{GRAPH_API_VERSION}/oauth/access_token",
                 params={
                     "client_id": settings.FACEBOOK_APP_ID,
@@ -97,7 +102,7 @@ class MetaOAuthCallbackView(views.APIView):
                     "redirect_uri": _redirect_uri(),
                     "code": code,
                 },
-                timeout=15,
+                timeout=_timeout,
             )
             token_data = token_resp.json()
             short_lived_token = token_data.get("access_token")
@@ -105,7 +110,7 @@ class MetaOAuthCallbackView(views.APIView):
                 msg = token_data.get("error", {}).get("message", "لم يتم استلام access_token")
                 return redirect(_settings_redirect("error", msg))
 
-            long_resp = requests.get(
+            long_resp = session.get(
                 f"https://graph.facebook.com/{GRAPH_API_VERSION}/oauth/access_token",
                 params={
                     "grant_type": "fb_exchange_token",
@@ -113,16 +118,16 @@ class MetaOAuthCallbackView(views.APIView):
                     "client_secret": settings.FACEBOOK_APP_SECRET,
                     "fb_exchange_token": short_lived_token,
                 },
-                timeout=15,
+                timeout=_timeout,
             )
             long_data = long_resp.json()
             long_lived_token = long_data.get("access_token", short_lived_token)
             expires_in = long_data.get("expires_in")
 
-            pages_resp = requests.get(
+            pages_resp = session.get(
                 f"https://graph.facebook.com/{GRAPH_API_VERSION}/me/accounts",
                 params={"access_token": long_lived_token, "fields": "id,name,access_token"},
-                timeout=15,
+                timeout=_timeout,
             )
             pages_data = pages_resp.json()
             pages = pages_data.get("data", [])
