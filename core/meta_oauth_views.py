@@ -160,6 +160,13 @@ class MetaOAuthCallbackView(views.APIView):
                 ]
             )
 
+            # Trigger sync immediately
+            try:
+                from agent.analytics_sync import sync_facebook
+                sync_facebook(agent_settings)
+            except Exception:
+                pass
+
             return redirect(_settings_redirect("success"))
         except requests.RequestException as exc:
             return redirect(_settings_redirect("error", str(exc)[:100]))

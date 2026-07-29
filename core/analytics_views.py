@@ -960,7 +960,14 @@ class AnalyticsSettingsView(views.APIView):
                       'ga4_property_id', 'ga4_service_account_json',
                       'ig_page_url'):
             if field in request.data:
-                setattr(s, field, (request.data[field] or '').strip() if isinstance(request.data[field], str) else request.data[field])
+                val = request.data[field]
+                if isinstance(val, str):
+                    val = val.strip()
+                    if field == 'meta_access_token' and (val.endswith('...') or val.endswith('…')):
+                        continue  # Do not overwrite with truncated preview token
+                    setattr(s, field, val)
+                else:
+                    setattr(s, field, val)
         for field in nullable_int_fields:
             if field in request.data:
                 value = request.data[field]
