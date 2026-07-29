@@ -41,6 +41,9 @@ urlpatterns = [
     path('analytics/products/categories/', analytics_views.AnalyticsProductsCategoriesView.as_view(), name='admin-analytics-products-categories'),
     path('analytics/products/underperforming/', analytics_views.AnalyticsProductsUnderperformingView.as_view(), name='admin-analytics-products-underperforming'),
     path('analytics/favorites/', analytics_views.AnalyticsFavoritesView.as_view(), name='admin-analytics-favorites'),
+    path('analytics/realtime/', analytics_views.AnalyticsRealtimeView.as_view(), name='admin-analytics-realtime'),
+    path('analytics/customers/ltv/', analytics_views.AnalyticsCustomersLTVView.as_view(), name='admin-analytics-customers-ltv'),
+    path('analytics/search/', analytics_views.AnalyticsSearchView.as_view(), name='admin-analytics-search'),
     # Alerts
     path('analytics/alerts/', analytics_views.AnalyticsAlertsView.as_view(), name='admin-analytics-alerts'),
     path('analytics/alerts/read-all/', analytics_views.AnalyticsAlertReadAllView.as_view(), name='admin-analytics-alerts-read-all'),

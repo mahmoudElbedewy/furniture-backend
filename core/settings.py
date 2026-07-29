@@ -230,4 +230,6 @@ BACKEND_BASE_URL = config(
 FRONTEND_BASE_URL = config(
     "FRONTEND_BASE_URL", default="https://homestyle-store.vercel.app"
 ).rstrip("/")
-META_OAUTH_SCOPES = "pages_show_list,pages_read_engagement,read_insights,pages_read_user_content"
+META_OAUTH_SCOPES = config(
+    "META_OAUTH_SCOPES", default="pages_show_list,pages_read_engagement"
+)

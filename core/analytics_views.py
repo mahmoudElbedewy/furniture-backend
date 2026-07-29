@@ -1,7 +1,9 @@
 import logging
+import json
 import requests
 from datetime import timedelta
-from django.db.models import Sum, Avg, Count, F
+from django.contrib.auth import get_user_model
+from django.db.models import Sum, Avg, Count, F, Max, Q
 from django.utils import timezone
 from rest_framework import views
 from rest_framework.response import Response
@@ -17,7 +19,7 @@ from .admin_views import IsAdminRole
 from .analytics_serializers import FacebookPostMetricSerializer, GATopPageSerializer
 from agent.models import FunnelEvent
 from agent.models import AnalyticsAlert
-from catalog.models import Product, Category
+from catalog.models import Product, Category, SearchQuery
 from orders.models import OrderItem
 
 
@@ -1286,6 +1288,150 @@ class AnalyticsFavoritesView(views.APIView):
 # ═══════════════════════════════════════════════════════════════════════════
 # Analytics Alerts
 # ═══════════════════════════════════════════════════════════════════════════
+class AnalyticsRealtimeView(views.APIView):
+    permission_classes = [IsAdminRole]
+
+    def get(self, request):
+        settings = AgentSettings.load()
+        fallback_window = timezone.now() - timedelta(minutes=5)
+        fallback_qs = WebPageVisit.objects.filter(created_at__gte=fallback_window)
+        internal_visitors = fallback_qs.exclude(session_key='').values('session_key').distinct().count()
+        if internal_visitors == 0:
+            internal_visitors = fallback_qs.count()
+
+        if settings.ga4_property_id and settings.ga4_service_account_json:
+            try:
+                from google.oauth2 import service_account
+                from google.analytics.data_v1beta import BetaAnalyticsDataClient
+                from google.analytics.data_v1beta.types import Metric, RunRealtimeReportRequest
+
+                creds_info = json.loads(settings.ga4_service_account_json)
+                credentials = service_account.Credentials.from_service_account_info(creds_info)
+                client = BetaAnalyticsDataClient(credentials=credentials)
+                report = client.run_realtime_report(RunRealtimeReportRequest(
+                    property=f"properties/{settings.ga4_property_id}",
+                    metrics=[Metric(name='activeUsers')],
+                ))
+                active_users = 0
+                if report.rows:
+                    active_users = int(float(report.rows[0].metric_values[0].value))
+
+                return Response({
+                    'currentVisitors': active_users,
+                    'source': 'ga4',
+                    'available': True,
+                    'fallbackVisitors': internal_visitors,
+                    'windowMinutes': 5,
+                    'reason': None,
+                })
+            except Exception as exc:
+                logger.warning('GA4 realtime report failed: %s', exc)
+
+        return Response({
+            'currentVisitors': internal_visitors,
+            'source': 'site',
+            'available': internal_visitors > 0,
+            'fallbackVisitors': internal_visitors,
+            'windowMinutes': 5,
+            'reason': None if internal_visitors > 0 else 'GA4 Realtime API is not configured and no internal visits were recorded in the last 5 minutes.',
+        })
+
+
+class AnalyticsCustomersLTVView(views.APIView):
+    permission_classes = [IsAdminRole]
+
+    def get(self, request):
+        limit = min(int(request.query_params.get('limit', 10)), 50)
+        User = get_user_model()
+        customers = (
+            User.objects.filter(orders__isnull=False)
+            .annotate(
+                lifetime_value=Sum('orders__total_price', filter=~Q(orders__status='cancelled')),
+                order_count=Count('orders', filter=~Q(orders__status='cancelled'), distinct=True),
+                avg_order_value=Avg('orders__total_price', filter=~Q(orders__status='cancelled')),
+                last_order_at=Max('orders__created_at', filter=~Q(orders__status='cancelled')),
+            )
+            .filter(lifetime_value__isnull=False)
+            .order_by('-lifetime_value', '-order_count')[:limit]
+        )
+
+        result = []
+        for customer in customers:
+            result.append({
+                'id': str(customer.id),
+                'email': customer.email,
+                'fullName': customer.full_name,
+                'phoneNumber': customer.phone_number,
+                'lifetimeValue': float(customer.lifetime_value or 0),
+                'orderCount': customer.order_count or 0,
+                'avgOrderValue': float(customer.avg_order_value or 0),
+                'lastOrderAt': customer.last_order_at.isoformat() if customer.last_order_at else None,
+            })
+
+        totals = Order.objects.filter(user__isnull=False).exclude(status='cancelled').aggregate(
+            total_ltv=Sum('total_price'),
+            total_orders=Count('id'),
+            avg_order_value=Avg('total_price'),
+        )
+
+        return Response({
+            'customers': result,
+            'summary': {
+                'registeredCustomers': User.objects.filter(orders__isnull=False).distinct().count(),
+                'totalLifetimeValue': float(totals['total_ltv'] or 0),
+                'totalOrders': totals['total_orders'] or 0,
+                'avgOrderValue': float(totals['avg_order_value'] or 0),
+            },
+        })
+
+
+class AnalyticsSearchView(views.APIView):
+    permission_classes = [IsAdminRole]
+
+    def _serialize_terms(self, qs, limit):
+        rows = (
+            qs.values('normalized_query')
+            .annotate(
+                searchCount=Count('id'),
+                totalResults=Sum('results_count'),
+                avgResults=Avg('results_count'),
+                lastSearchedAt=Max('created_at'),
+            )
+            .order_by('-searchCount', 'normalized_query')[:limit]
+        )
+        return [
+            {
+                'query': row['normalized_query'],
+                'searchCount': row['searchCount'] or 0,
+                'totalResults': row['totalResults'] or 0,
+                'avgResults': round(row['avgResults'] or 0, 1),
+                'lastSearchedAt': row['lastSearchedAt'].isoformat() if row['lastSearchedAt'] else None,
+            }
+            for row in rows
+        ]
+
+    def get(self, request):
+        start, end, *_ = parse_date_range(request)
+        limit = min(int(request.query_params.get('limit', 10)), 50)
+        searches = SearchQuery.objects.filter(created_at__date__range=(start, end))
+
+        total_searches = searches.count()
+        zero_result_searches = searches.filter(has_results=False).count()
+        successful_searches = searches.filter(has_results=True).count()
+
+        return Response({
+            'topNoResults': self._serialize_terms(searches.filter(has_results=False), limit),
+            'topSuccessful': self._serialize_terms(searches.filter(has_results=True), limit),
+            'summary': {
+                'totalSearches': total_searches,
+                'uniqueQueries': searches.values('normalized_query').distinct().count(),
+                'zeroResultSearches': zero_result_searches,
+                'successfulSearches': successful_searches,
+                'zeroResultRate': round((zero_result_searches / total_searches) * 100, 1) if total_searches else 0.0,
+            },
+        })
+
+
 class AnalyticsAlertsView(views.APIView):
     """GET  /api/admin/analytics/alerts/   — جلب كل التنبيهات (مرتبة بالأحدث أولاً)"""
     permission_classes = [IsAdminRole]
