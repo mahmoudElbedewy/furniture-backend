@@ -22,6 +22,7 @@ from .models import (
     Product,
     Review,
     Favorite,
+    SearchQuery,
     ProductShippingRate,
 )
 
@@ -81,6 +82,50 @@ class ProductListView(generics.ListAPIView):
     serializer_class = ProductSerializer
     permission_classes = [permissions.AllowAny]
     pagination_class = StandardResultsSetPagination
+
+    def _log_search_query(self, search, qs):
+        search_text = (search or "").strip()
+        if not search_text:
+            return
+
+        results_count = qs.count()
+        params = self.request.query_params
+        tracked_filters = {
+            key: params.get(key)
+            for key in (
+                "category",
+                "min_price",
+                "max_price",
+                "material",
+                "color",
+                "has_deposit",
+                "ships_nationwide",
+                "ordering",
+            )
+            if params.get(key) not in (None, "")
+        }
+
+        SearchQuery.objects.create(
+            query=search_text[:255],
+            normalized_query=" ".join(search_text.lower().split())[:255],
+            results_count=results_count,
+            has_results=results_count > 0,
+            customer_identifier=resolve_identifier_for_request(self.request, params) or "",
+            user=self.request.user if self.request.user.is_authenticated else None,
+            filters=tracked_filters,
+        )
+
+    def list(self, request, *args, **kwargs):
+        queryset = self.filter_queryset(self.get_queryset())
+        self._log_search_query(request.query_params.get("search"), queryset)
+
+        page = self.paginate_queryset(queryset)
+        if page is not None:
+            serializer = self.get_serializer(page, many=True)
+            return self.get_paginated_response(serializer.data)
+
+        serializer = self.get_serializer(queryset, many=True)
+        return Response(serializer.data)
 
     def get_queryset(self):
         qs = (

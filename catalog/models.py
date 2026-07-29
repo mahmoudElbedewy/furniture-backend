@@ -1,4 +1,5 @@
 import uuid
+from django.conf import settings
 from django.db import models
 from suppliers.models import Supplier
 
@@ -167,6 +168,36 @@ class Favorite(models.Model):
 
     def __str__(self):
         return f"{self.product.title} - {self.customer_identifier}"
+
+
+class SearchQuery(models.Model):
+    query = models.CharField(max_length=255)
+    normalized_query = models.CharField(max_length=255, db_index=True)
+    results_count = models.PositiveIntegerField(default=0)
+    has_results = models.BooleanField(default=False, db_index=True)
+    customer_identifier = models.CharField(max_length=255, blank=True, default="")
+    user = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="search_queries",
+    )
+    filters = models.JSONField(default=dict, blank=True)
+    created_at = models.DateTimeField(auto_now_add=True, db_index=True)
+
+    class Meta:
+        db_table = "search_queries"
+        ordering = ["-created_at"]
+        indexes = [
+            models.Index(fields=["normalized_query", "created_at"]),
+            models.Index(fields=["has_results", "created_at"]),
+        ]
+
+    def __str__(self):
+        return f"{self.query} ({self.results_count})"
+
+
 class ProductVariant(models.Model):
     product = models.ForeignKey(
         Product, on_delete=models.CASCADE, related_name="variants"
