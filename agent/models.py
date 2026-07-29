@@ -211,3 +211,70 @@ class SyncLog(models.Model):
 
     def __str__(self):
         return f"{self.get_source_display()} - {self.get_status_display()} @ {self.finished_at}"
+
+class FunnelEvent(models.Model):
+    EVENT_CHOICES = (
+        ('product_view', 'مشاهدة منتج'),
+        ('add_to_cart', 'إضافة للسلة'),
+        ('checkout_start', 'بدء الدفع'),
+        ('order_complete', 'إتمام الطلب'),
+    )
+
+    event_type = models.CharField(max_length=20, choices=EVENT_CHOICES, db_index=True)
+    session_key = models.CharField(max_length=100, blank=True, default='')
+    product = models.ForeignKey(
+        'catalog.Product', on_delete=models.SET_NULL, null=True, blank=True,
+        related_name='funnel_events',
+    )
+    order = models.ForeignKey(
+        'orders.Order', on_delete=models.SET_NULL, null=True, blank=True,
+        related_name='funnel_events',
+    )
+    created_at = models.DateTimeField(auto_now_add=True, db_index=True)
+
+    class Meta:
+        indexes = [models.Index(fields=['event_type', 'created_at'])]
+
+    def __str__(self):
+        return f'{self.event_type} @ {self.created_at}'
+
+
+class AnalyticsAlert(models.Model):
+    """تنبيه تحليلي دائم — يُولَّد تلقائياً ويُخزَّن في قاعدة البيانات."""
+    SEVERITY_CHOICES = (
+        ('info', 'معلومة'),
+        ('warning', 'تحذير'),
+        ('critical', 'حرج'),
+    )
+    ALERT_TYPE_CHOICES = (
+        ('sessions_drop', 'انخفاض الجلسات'),
+        ('bounce_rate_spike', 'ارتفاع معدل الارتداد'),
+        ('meta_sync_stopped', 'توقف مزامنة Meta'),
+        ('ga4_sync_stopped', 'توقف مزامنة GA4'),
+        ('meta_token_expiring', 'توكن Meta على وشك الانتهاء'),
+        ('orders_drop', 'انخفاض الطلبات'),
+        ('no_data', 'لا توجد بيانات'),
+    )
+
+    alert_type = models.CharField(max_length=30, choices=ALERT_TYPE_CHOICES, db_index=True)
+    severity = models.CharField(max_length=10, choices=SEVERITY_CHOICES, default='info')
+    message = models.TextField()
+    detail = models.TextField(blank=True, default='')
+    is_read = models.BooleanField(default=False, db_index=True)
+    created_at = models.DateTimeField(auto_now_add=True, db_index=True)
+    read_at = models.DateTimeField(null=True, blank=True)
+
+    # Optional: threshold values that triggered the alert
+    threshold_pct = models.FloatField(null=True, blank=True)
+    actual_value = models.FloatField(null=True, blank=True)
+    previous_value = models.FloatField(null=True, blank=True)
+
+    class Meta:
+        ordering = ['-created_at']
+        indexes = [
+            models.Index(fields=['is_read', 'created_at']),
+            models.Index(fields=['alert_type', 'created_at']),
+        ]
+
+    def __str__(self):
+        return f'[{self.severity.upper()}] {self.alert_type} @ {self.created_at:%Y-%m-%d %H:%M}'

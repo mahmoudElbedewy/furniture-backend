@@ -15,12 +15,17 @@ from orders.models import Order
 from chat.models import ChatConversation
 from .admin_views import IsAdminRole
 from .analytics_serializers import FacebookPostMetricSerializer, GATopPageSerializer
+from agent.models import FunnelEvent
+from agent.models import AnalyticsAlert
+from catalog.models import Product, Category
+from orders.models import OrderItem
+
 
 logger = logging.getLogger(__name__)
 
 
 def parse_date_range(request):
-    """?range=7d|30d|90d|custom&start=YYYY-MM-DD&end=YYYY-MM-DD"""
+    """?range=7d|30d|90d|custom&start=YYYY-MM-DD&end=YYYY-MM-DD&compare_to=previous_period|previous_year"""
     range_key = request.query_params.get('range', '30d')
     today = timezone.localdate()
     if range_key == 'custom':
@@ -31,8 +36,20 @@ def parse_date_range(request):
     else:
         days = {'today': 0, '7d': 7, '30d': 30, '90d': 90}.get(range_key, 30)
         start_date, end_date = today - timedelta(days=days), today
+
     span = (end_date - start_date).days or 1
-    prev_start, prev_end = start_date - timedelta(days=span), start_date - timedelta(days=1)
+    compare_to = request.query_params.get('compare_to', 'previous_period')
+
+    if compare_to == 'previous_year':
+        try:
+            prev_start = start_date.replace(year=start_date.year - 1)
+            prev_end = end_date.replace(year=end_date.year - 1)
+        except ValueError:
+            prev_start = start_date - timedelta(days=365)
+            prev_end = end_date - timedelta(days=365)
+    else:
+        prev_start, prev_end = start_date - timedelta(days=span), start_date - timedelta(days=1)
+
     return start_date, end_date, prev_start, prev_end
 
 
@@ -248,15 +265,53 @@ class AnalyticsOverviewView(views.APIView):
                 'لا توجد منشورات Meta متزامنة لهذه الفترة.',
             ))
 
+        compare_to = request.query_params.get('compare_to', 'previous_period')
+        daily_series = []
+        cur_day = start
+        prev_day = prev_start
+        while cur_day <= end:
+            v_cur = WebPageVisit.objects.filter(created_at__date=cur_day).count()
+            v_prev = WebPageVisit.objects.filter(created_at__date=prev_day).count()
+            ga_c = GADailyTraffic.objects.filter(date=cur_day).aggregate(s=Sum('sessions'))['s'] or 0
+            ga_p = GADailyTraffic.objects.filter(date=prev_day).aggregate(s=Sum('sessions'))['s'] or 0
+
+            reach_c = FacebookPostMetric.objects.filter(published_at__date=cur_day).aggregate(r=Sum('reach'))['r'] or 0
+            reach_p = FacebookPostMetric.objects.filter(published_at__date=prev_day).aggregate(r=Sum('reach'))['r'] or 0
+
+            ord_c = Order.objects.filter(created_at__date=cur_day).count()
+            ord_p = Order.objects.filter(created_at__date=prev_day).count()
+
+            daily_series.append({
+                'date': cur_day.strftime('%m-%d'),
+                'sessions': ga_c if ga_c > 0 else v_cur,
+                'prevSessions': ga_p if ga_p > 0 else v_prev,
+                'reach': reach_c,
+                'prevReach': reach_p,
+                'conversions': ord_c,
+                'prevConversions': ord_p,
+            })
+            cur_day += timedelta(days=1)
+            prev_day += timedelta(days=1)
+
         return Response({
             'kpis': {
                 'totalReach': total_reach,
+                'prevTotalReach': prev_reach,
                 'totalEngagement': total_engagement,
+                'prevTotalEngagement': prev_engagement,
                 'websiteSessions': total_sessions,
+                'prevWebsiteSessions': prev_sessions,
                 'sessionsTrend': pct_change(total_sessions, prev_sessions),
                 'conversions': conversions,
+                'prevConversions': prev_conversions,
                 'conversionsTrend': pct_change(conversions, prev_conversions),
             },
+            'comparison': {
+                'compareTo': compare_to,
+                'prevStart': str(prev_start),
+                'prevEnd': str(prev_end),
+            },
+            'dailyTimeSeries': daily_series,
             'kpi': {
                 'totalVisitors': total_sessions,
                 'visitorsTrend': pct_change(total_sessions, prev_sessions),
@@ -475,22 +530,15 @@ class AnalyticsAudienceView(views.APIView):
             ],
             'newVsReturning': [
                 {'name': 'New', 'value': ga_traffic.aggregate(v=Sum('new_users'))['v'] or 0},
-                {'name': 'Returning', 'value': max(0, (ga_traffic.aggregate(v=Sum('users'))['v'] or 0)
-                                                       - (ga_traffic.aggregate(v=Sum('new_users'))['v'] or 0))},
+                {'name': 'Returning', 'value': max(0, (ga_traffic.aggregate(v=Sum('users'))['v'] or 0) - (ga_traffic.aggregate(v=Sum('new_users'))['v'] or 0))},
             ],
             'dailyUsers': [{'date': str(t.date), 'users': t.users} for t in ga_traffic],
             'dataAvailability': {
-                'followers': _availability(
-                    meta_has_synced_followers,
-                    'facebook',
-                    'لا توجد مزامنة Meta ناجحة للمتابعين.',
-                ),
+                'followers': _availability(meta_has_synced_followers, 'facebook', 'لا توجد مزامنة Meta ناجحة للمتابعين.'),
                 'sessionsBySource': _availability(True, 'ga4'),
                 'newVsReturning': _availability(True, 'ga4'),
             },
-            'missingData': [] if meta_has_synced_followers else [
-                _missing('followers', 'Social followers', 'لا توجد مزامنة Meta ناجحة للمتابعين.')
-            ],
+            'missingData': [] if meta_has_synced_followers else [_missing('followers', 'Social followers', 'لا توجد مزامنة Meta ناجحة للمتابعين.')],
         })
 
 
@@ -501,31 +549,68 @@ class AnalyticsContentView(views.APIView):
     permission_classes = [IsAdminRole]
 
     def get(self, request):
-        start, end, *_ = parse_date_range(request)
+        start, end, prev_start, prev_end = parse_date_range(request)
+        compare_to = request.query_params.get('compare_to', 'previous_period')
+
         posts = FacebookPostMetric.objects.filter(published_at__date__range=(start, end))[:50]
+        prev_posts = FacebookPostMetric.objects.filter(published_at__date__range=(prev_start, prev_end))[:50]
+
+        total_reach = posts.aggregate(v=Sum('reach'))['v'] or 0
+        prev_reach = prev_posts.aggregate(v=Sum('reach'))['v'] or 0
+
+        agg_cur = posts.aggregate(l=Sum('likes'), c=Sum('comments'), s=Sum('shares'))
+        total_eng = (agg_cur['l'] or 0) + (agg_cur['c'] or 0) + (agg_cur['s'] or 0)
+
+        agg_prev = prev_posts.aggregate(l=Sum('likes'), c=Sum('comments'), s=Sum('shares'))
+        prev_eng = (agg_prev['l'] or 0) + (agg_prev['c'] or 0) + (agg_prev['s'] or 0)
+
         by_type = {}
         for p in posts:
-            by_type.setdefault(p.post_type, {'type': p.post_type, 'reach': 0, 'count': 0})
+            by_type.setdefault(p.post_type, {'type': p.post_type, 'reach': 0, 'count': 0, 'prevReach': 0})
             by_type[p.post_type]['reach'] += p.reach
             by_type[p.post_type]['count'] += 1
+
+        for p in prev_posts:
+            by_type.setdefault(p.post_type, {'type': p.post_type, 'reach': 0, 'count': 0, 'prevReach': 0})
+            by_type[p.post_type]['prevReach'] += p.reach
+
+        # Build daily series
+        daily_series = []
+        cur_d = start
+        prv_d = prev_start
+        while cur_d <= end:
+            r_c = FacebookPostMetric.objects.filter(published_at__date=cur_d).aggregate(r=Sum('reach'))['r'] or 0
+            r_p = FacebookPostMetric.objects.filter(published_at__date=prv_d).aggregate(r=Sum('reach'))['r'] or 0
+            daily_series.append({
+                'date': cur_d.strftime('%m-%d'),
+                'reach': r_c,
+                'prevReach': r_p,
+            })
+            cur_d += timedelta(days=1)
+            prv_d += timedelta(days=1)
 
         return Response({
             'posts': FacebookPostMetricSerializer(posts, many=True).data,
             'byPostType': list(by_type.values()),
-            'dataAvailability': {
-                'posts': _availability(
-                    posts.exists(),
-                    'facebook',
-                    'لا توجد منشورات Meta متزامنة لهذه الفترة.',
-                ),
+            'metrics': {
+                'totalReach': total_reach,
+                'prevTotalReach': prev_reach,
+                'reachTrend': pct_change(total_reach, prev_reach),
+                'totalEngagement': total_eng,
+                'prevTotalEngagement': prev_eng,
+                'engagementTrend': pct_change(total_eng, prev_eng),
             },
-            'missingData': [] if posts.exists() else [
-                _missing('posts', 'Content posts', 'شغّل مزامنة Meta بعد إضافة token وpage id صحيحين.')
-            ],
+            'comparison': {
+                'compareTo': compare_to,
+                'prevStart': str(prev_start),
+                'prevEnd': str(prev_end),
+            },
+            'dailySeries': daily_series,
+            'dataAvailability': {
+                'posts': _availability(posts.exists(), 'facebook', 'لا توجد منشورات Meta متزامنة لهذه الفترة.'),
+            },
+            'missingData': [] if posts.exists() else [_missing('posts', 'Content posts', 'شغّل مزامنة Meta بعد إضافة token وpage id صحيحين.')],
         })
-
-
-
 
 
 # ═══════════════════════════════════════════════════════════════════════════
@@ -535,21 +620,19 @@ class AnalyticsWebView(views.APIView):
     permission_classes = [IsAdminRole]
 
     def get(self, request):
-        from django.db.models.functions import TruncDate
-        today = timezone.localdate()
-        start_30 = today - timedelta(days=30)
-        start_prev = today - timedelta(days=60)
+        start, end, prev_start, prev_end = parse_date_range(request)
+        compare_to = request.query_params.get('compare_to', 'previous_period')
 
         # Current period
-        visits = WebPageVisit.objects.filter(created_at__date__range=(start_30, today))
-        prev_visits = WebPageVisit.objects.filter(created_at__date__range=(start_prev, start_30 - timedelta(days=1)))
+        visits = WebPageVisit.objects.filter(created_at__date__range=(start, end))
+        prev_visits = WebPageVisit.objects.filter(created_at__date__range=(prev_start, prev_end))
 
         total_sessions = visits.values('session_key').distinct().count() or visits.count()
         prev_sessions = prev_visits.values('session_key').distinct().count() or prev_visits.count()
 
         # Also try GA data
-        ga = GADailyTraffic.objects.filter(date__range=(start_30, today))
-        ga_prev = GADailyTraffic.objects.filter(date__range=(start_prev, start_30 - timedelta(days=1)))
+        ga = GADailyTraffic.objects.filter(date__range=(start, end))
+        ga_prev = GADailyTraffic.objects.filter(date__range=(prev_start, prev_end))
         ga_sessions = ga.aggregate(v=Sum('sessions'))['v'] or 0
         ga_prev_sessions = ga_prev.aggregate(v=Sum('sessions'))['v'] or 0
         ga_bounce = ga.aggregate(v=Avg('bounce_rate'))['v'] or 0
@@ -557,7 +640,6 @@ class AnalyticsWebView(views.APIView):
         ga_duration = ga.aggregate(v=Avg('avg_session_duration_seconds'))['v'] or 0
         ga_prev_duration = ga_prev.aggregate(v=Avg('avg_session_duration_seconds'))['v'] or 0
 
-        # Use GA if available, else WebPageVisit
         use_ga = ga_sessions > 0
         final_sessions = ga_sessions if use_ga else total_sessions
         final_prev_sessions = ga_prev_sessions if use_ga else prev_sessions
@@ -572,97 +654,88 @@ class AnalyticsWebView(views.APIView):
             dur_sec = int(duration % 60)
             duration_display = f"{dur_min}:{dur_sec:02d}"
 
-        # Top pages from WebPageVisit
+        prev_duration_display = None
+        if prev_duration is not None:
+            dur_min = int(prev_duration // 60)
+            dur_sec = int(prev_duration % 60)
+            prev_duration_display = f"{dur_min}:{dur_sec:02d}"
+
+        # Daily series for web
+        daily_series = []
+        cur_d = start
+        prv_d = prev_start
+        while cur_d <= end:
+            c_v = WebPageVisit.objects.filter(created_at__date=cur_d).count()
+            p_v = WebPageVisit.objects.filter(created_at__date=prv_d).count()
+            c_ga = GADailyTraffic.objects.filter(date=cur_d).aggregate(s=Sum('sessions'), b=Avg('bounce_rate'))
+            p_ga = GADailyTraffic.objects.filter(date=prv_d).aggregate(s=Sum('sessions'), b=Avg('bounce_rate'))
+
+            c_s = c_ga['s'] if (c_ga['s'] and c_ga['s'] > 0) else c_v
+            p_s = p_ga['s'] if (p_ga['s'] and p_ga['s'] > 0) else p_v
+
+            daily_series.append({
+                'date': cur_d.strftime('%m-%d'),
+                'sessions': c_s,
+                'prevSessions': p_s,
+                'bounceRate': round(c_ga['b'] or 0, 1),
+                'prevBounceRate': round(p_ga['b'] or 0, 1),
+            })
+            cur_d += timedelta(days=1)
+            prv_d += timedelta(days=1)
+
+        # Top pages
         top_pages_qs = (
             visits.values('path')
             .annotate(views=Count('id'), unique_visitors=Count('session_key', distinct=True))
             .order_by('-views')[:10]
         )
-        top_pages = []
-        for tp in top_pages_qs:
-            top_pages.append({
+        top_pages = [
+            {
                 'name': tp['path'].split('/')[-1] or tp['path'],
                 'page': tp['path'],
                 'views': tp['views'],
                 'uniqueVisitors': tp['unique_visitors'],
-                'bounceRate': None,
-                'avgDuration': None,
-            })
+                'bounceRate': 0,
+                'avgDuration': '0:00',
+            } for tp in top_pages_qs
+        ]
 
-        # Also merge GA top pages if available
-        ga_top = (
-            GATopPage.objects.filter(date__range=(start_30, today))
-            .values('page_path')
-            .annotate(total_views=Sum('views'), total_unique=Sum('unique_visitors'),
-                      avg_bounce=Avg('bounce_rate'), avg_dur=Avg('avg_duration_seconds'))
-            .order_by('-total_views')[:10]
-        )
-        if ga_top.exists():
-            top_pages = []
-            for tp in ga_top:
-                d = tp['avg_dur'] or 0
-                top_pages.append({
-                    'name': tp['page_path'].split('/')[-1] or tp['page_path'],
-                    'page': tp['page_path'],
-                    'views': tp['total_views'],
-                    'uniqueVisitors': tp['total_unique'],
-                    'bounceRate': round(tp['avg_bounce'] or 0, 1),
-                    'avgDuration': f"{int(d // 60)}:{int(d % 60):02d}",
-                })
+        # Traffic sources
+        source_rows = visits.values('referrer_type').annotate(value=Count('id'))
+        source_map = {row['referrer_type']: row['value'] for row in source_rows}
+        traffic_sources = [
+            {'name': 'Organic', 'nameAr': 'بحث عضوي', 'value': source_map.get('organic', 0), 'color': '#16a34a'},
+            {'name': 'Social', 'nameAr': 'سوشيال', 'value': source_map.get('social', 0), 'color': '#2563eb'},
+            {'name': 'Direct', 'nameAr': 'مباشر', 'value': source_map.get('direct', 0), 'color': '#7c3aed'},
+            {'name': 'Referral', 'nameAr': 'إحالات', 'value': source_map.get('referral', 0), 'color': '#ea580c'},
+        ]
 
-        # Sparklines (last 7 data points)
-        daily_sessions = (
-            visits.annotate(day=TruncDate('created_at'))
-            .values('day').annotate(cnt=Count('id')).order_by('day')
-        )
-        session_spark = [{'v': d['cnt']} for d in daily_sessions][-7:]
-        if use_ga:
-            session_spark = [{'v': t.sessions} for t in ga.order_by('date')][-7:]
+        bounce_spark = [{'v': d['bounceRate']} for d in daily_series]
+        session_spark = [{'v': d['sessions']} for d in daily_series]
+        duration_spark = [{'v': 1} for _ in daily_series]
 
         return Response({
             'metrics': {
                 'bounceRate': bounce_rate,
-                'bounceRateTrend': pct_change(bounce_rate, prev_bounce) if use_ga else None,
+                'prevBounceRate': prev_bounce,
+                'bounceRateTrend': pct_change(bounce_rate or 0, prev_bounce or 0),
                 'avgSessionDuration': duration_display,
-                'avgSessionDurationTrend': pct_change(duration, prev_duration) if use_ga else None,
+                'prevAvgSessionDuration': prev_duration_display,
+                'avgSessionDurationTrend': pct_change(duration or 0, prev_duration or 0),
                 'totalSessions': final_sessions,
+                'prevTotalSessions': final_prev_sessions,
                 'totalSessionsTrend': pct_change(final_sessions, final_prev_sessions),
             },
-            'topPages': top_pages,
-            'bounceRateSparkline': [{'v': round(t.bounce_rate, 1)} for t in ga.order_by('date')][-7:] if use_ga else [],
-            'sessionDurationSparkline': [{'v': t.avg_session_duration_seconds} for t in ga.order_by('date')][-7:] if use_ga else [],
-            'totalSessionsSparkline': session_spark,
-            'trafficSources': (
-                [
-                    {'name': 'Organic', 'nameAr': 'بحث عضوي', 'value': ga.aggregate(v=Sum('source_organic'))['v'] or 0, 'color': '#6366f1'},
-                    {'name': 'Social', 'nameAr': 'وسائل التواصل', 'value': ga.aggregate(v=Sum('source_social'))['v'] or 0, 'color': '#f472b6'},
-                    {'name': 'Direct', 'nameAr': 'مباشر', 'value': ga.aggregate(v=Sum('source_direct'))['v'] or 0, 'color': '#34d399'},
-                    {'name': 'Referral', 'nameAr': 'إحالات', 'value': ga.aggregate(v=Sum('source_referral'))['v'] or 0, 'color': '#fb923c'},
-                ] if use_ga else [
-                    {'name': r['referrer_type'].capitalize(), 'nameAr': {'organic': 'بحث عضوي', 'social': 'وسائل التواصل', 'direct': 'مباشر', 'referral': 'إحالات'}.get(r['referrer_type'], r['referrer_type']), 'value': r['cnt'], 'color': {'organic': '#6366f1', 'social': '#f472b6', 'direct': '#34d399', 'referral': '#fb923c'}.get(r['referrer_type'], '#94a3b8')}
-                    for r in visits.values('referrer_type').annotate(cnt=Count('id'))
-                ] if total_sessions > 0 else []
-            ),
-            'dataAvailability': {
-                'totalSessions': _availability(
-                    final_sessions > 0,
-                    'ga4' if use_ga else ('site' if total_sessions > 0 else None),
-                    'لا توجد بيانات زيارات من GA4 أو تتبع الموقع الداخلي.',
-                ),
-                'bounceRate': _availability(
-                    use_ga,
-                    'ga4',
-                    'معدل الارتداد غير متاح من التتبع الداخلي. اربط GA4 لعرضه.',
-                ),
-                'avgSessionDuration': _availability(
-                    use_ga,
-                    'ga4',
-                    'مدة الجلسة غير متاحة من التتبع الداخلي. اربط GA4 لعرضها.',
-                ),
+            'comparison': {
+                'compareTo': compare_to,
+                'prevStart': str(prev_start),
+                'prevEnd': str(prev_end),
             },
-            'missingData': [] if use_ga else [
-                _missing('ga4Engagement', 'GA4 engagement metrics', 'اربط GA4 لعرض bounce rate ومدة الجلسة.')
-            ],
+            'dailySeries': daily_series,
+            'topPages': top_pages,
+            'trafficSources': traffic_sources,
+            'bounceRateSparkline': bounce_spark,
+            'sessionDurationSparkline': duration_spark,
         })
 
 
@@ -970,3 +1043,323 @@ class AnalyticsSyncNowView(views.APIView):
             'ok': ok,
             'results': results,
         }, status=200 if ok else 400)
+class AnalyticsSalesFunnelView(views.APIView):
+    permission_classes = [IsAdminRole]
+
+    STEPS = [
+        ('product_view', 'مشاهدة منتج'),
+        ('add_to_cart', 'إضافة للسلة'),
+        ('checkout_start', 'بدء الدفع'),
+        ('order_complete', 'إتمام الطلب'),
+    ]
+
+    def get(self, request):
+        start, end, prev_start, prev_end = parse_date_range(request)
+
+        events = FunnelEvent.objects.filter(created_at__date__range=(start, end))
+        prev_events = FunnelEvent.objects.filter(created_at__date__range=(prev_start, prev_end))
+
+        counts = {key: events.filter(event_type=key).count() for key, _ in self.STEPS}
+        prev_counts = {key: prev_events.filter(event_type=key).count() for key, _ in self.STEPS}
+
+        steps = []
+        for idx, (key, label) in enumerate(self.STEPS):
+            count = counts[key]
+            prev_count = counts[self.STEPS[idx - 1][0]] if idx > 0 else count
+            step_conversion = round((count / prev_count) * 100, 1) if prev_count else 0.0
+            steps.append({
+                'key': key,
+                'label': label,
+                'count': count,
+                'stepConversionRate': step_conversion if idx > 0 else 100.0,
+            })
+
+        overall_conversion = round(
+            (counts['order_complete'] / counts['product_view']) * 100, 2
+        ) if counts['product_view'] else 0.0
+        prev_overall_conversion = round(
+            (prev_counts['order_complete'] / prev_counts['product_view']) * 100, 2
+        ) if prev_counts['product_view'] else 0.0
+
+        has_data = events.exists()
+
+        return Response({
+            'steps': steps,
+            'overallConversionRate': overall_conversion,
+            'overallConversionTrend': pct_change(overall_conversion, prev_overall_conversion),
+            'dataAvailability': {
+                'funnel': _availability(
+                    has_data, 'site',
+                    'لا توجد أحداث funnel مسجلة بعد لهذه الفترة. التتبع بدأ حديثًا فقط.',
+                ),
+            },
+            'missingData': [] if has_data else [
+                _missing('funnel', 'Conversion funnel', 'لا توجد أحداث مسجلة بعد — التتبع الجديد يحتاج وقت لتجميع بيانات.')
+            ],
+        })
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# Product Analytics Views
+# ═══════════════════════════════════════════════════════════════════════════
+class AnalyticsProductsTopView(views.APIView):
+    permission_classes = [IsAdminRole]
+
+    def get(self, request):
+        start, end, *_ = parse_date_range(request)
+
+        products = Product.objects.select_related('category').prefetch_related('images', 'funnel_events').all()
+        top_products = []
+        for p in products:
+            fe_views = FunnelEvent.objects.filter(product=p, event_type='product_view', created_at__date__range=(start, end)).count()
+            fe_carts = FunnelEvent.objects.filter(product=p, event_type='add_to_cart', created_at__date__range=(start, end)).count()
+            
+            views_total = fe_views if fe_views > 0 else p.views_count
+            
+            order_items = OrderItem.objects.filter(product=p, order__created_at__date__range=(start, end))
+            orders_cnt = order_items.aggregate(v=Sum('quantity'))['v'] or 0
+            if orders_cnt == 0:
+                orders_cnt = p.orders_count
+                
+            revenue = sum(item.price_at_order_time * item.quantity for item in order_items)
+            conv_rate = round((orders_cnt / views_total) * 100, 1) if views_total > 0 else 0.0
+
+            top_products.append({
+                'id': str(p.id),
+                'title': p.title,
+                'slug': p.slug,
+                'category_name': p.category.name if p.category else 'عام',
+                'primary_image': p.primary_image_url(),
+                'price': float(p.final_price),
+                'views': views_total,
+                'cart_adds': fe_carts,
+                'orders': orders_cnt,
+                'revenue': float(revenue),
+                'conversion_rate': conv_rate,
+            })
+
+        top_products.sort(key=lambda x: (x['orders'], x['views']), reverse=True)
+
+        return Response({
+            'products': top_products[:10],
+            'total_products': len(top_products),
+        })
+
+
+class AnalyticsProductsCategoriesView(views.APIView):
+    permission_classes = [IsAdminRole]
+
+    def get(self, request):
+        start, end, *_ = parse_date_range(request)
+
+        categories = Category.objects.prefetch_related('products').all()
+        result = []
+        for cat in categories:
+            cat_products = cat.products.all()
+            products_count = cat_products.count()
+            
+            views_sum = sum(p.views_count for p in cat_products)
+            
+            order_items = OrderItem.objects.filter(product__category=cat, order__created_at__date__range=(start, end))
+            orders_cnt = order_items.aggregate(v=Sum('quantity'))['v'] or 0
+            revenue = sum(item.price_at_order_time * item.quantity for item in order_items)
+
+            result.append({
+                'id': cat.id,
+                'name': cat.name,
+                'slug': cat.slug,
+                'products_count': products_count,
+                'views': views_sum,
+                'orders': orders_cnt,
+                'revenue': float(revenue),
+            })
+
+        result.sort(key=lambda x: x['revenue'], reverse=True)
+        return Response({'categories': result})
+
+
+class AnalyticsProductsUnderperformingView(views.APIView):
+    permission_classes = [IsAdminRole]
+
+    def get(self, request):
+        start, end, *_ = parse_date_range(request)
+        products = Product.objects.select_related('category').prefetch_related('images').all()
+
+        underperforming = []
+        for p in products:
+            fe_views = FunnelEvent.objects.filter(product=p, event_type='product_view', created_at__date__range=(start, end)).count()
+            views_total = fe_views if fe_views > 0 else p.views_count
+
+            order_items = OrderItem.objects.filter(product=p, order__created_at__date__range=(start, end))
+            orders_cnt = order_items.aggregate(v=Sum('quantity'))['v'] or 0
+
+            conv_rate = round((orders_cnt / views_total) * 100, 1) if views_total > 0 else 0.0
+
+            if views_total >= 3 and (conv_rate < 5.0 or orders_cnt == 0):
+                reason = "مشاهدات عالية مقارنة بالمبيعات — يفضل مراجعة السعر أو الوصف"
+                if orders_cnt == 0:
+                    reason = "المنتج يعجب الزوار لكن لا يتم شاؤه — يُنصح بخصم أو توفير شحن مجاني"
+                
+                underperforming.append({
+                    'id': str(p.id),
+                    'title': p.title,
+                    'slug': p.slug,
+                    'category_name': p.category.name if p.category else 'عام',
+                    'primary_image': p.primary_image_url(),
+                    'price': float(p.final_price),
+                    'views': views_total,
+                    'orders': orders_cnt,
+                    'conversion_rate': conv_rate,
+                    'reason': reason,
+                })
+
+        underperforming.sort(key=lambda x: x['views'], reverse=True)
+        return Response({'products': underperforming[:10]})
+
+
+class AnalyticsFavoritesView(views.APIView):
+    permission_classes = [IsAdminRole]
+
+    def get(self, request):
+        from catalog.models import Product, Favorite
+        from orders.models import OrderItem
+        from django.db.models import Count
+
+        # Get all products and count their favorites
+        favorites_by_product = Favorite.objects.values('product').annotate(count=Count('id')).order_by('-count')
+
+        result = []
+        for item in favorites_by_product:
+            p_id = item['product']
+            fav_count = item['count']
+            try:
+                product = Product.objects.get(id=p_id)
+            except Product.DoesNotExist:
+                continue
+
+            # Find all unique customer_identifiers who favorited this product
+            fav_identifiers = set(Favorite.objects.filter(product=product).values_list('customer_identifier', flat=True))
+
+            # Find all orders containing this product
+            order_items = OrderItem.objects.filter(product=product).select_related('order__user')
+            
+            # Find which order users match our favorites
+            ordered_identifiers = set()
+            for oi in order_items:
+                order = oi.order
+                if order.user:
+                    email = (order.user.email or "").strip().lower()
+                    if email and "@" in email:
+                        user_ident = email.split("@")[0]
+                    else:
+                        user_ident = str(order.user.id)
+                    ordered_identifiers.add(user_ident)
+
+            # Get session_keys from FunnelEvent for this product where event_type = 'order_complete'
+            fe_sessions = set(FunnelEvent.objects.filter(product=product, event_type='order_complete').values_list('session_key', flat=True))
+            ordered_identifiers.update(fe_sessions)
+            
+            # Count the intersection of favorited & ordered
+            converted_users = fav_identifiers.intersection(ordered_identifiers)
+            converted_count = len(converted_users)
+
+            conversion_rate = round((converted_count / len(fav_identifiers)) * 100, 1) if fav_identifiers else 0.0
+
+            result.append({
+                'product_id': str(product.id),
+                'product_title': product.title,
+                'product_slug': product.slug,
+                'product_price': float(product.final_price),
+                'primary_image': product.primary_image_url(),
+                'favorites_count': fav_count,
+                'converted_count': converted_count,
+                'conversion_rate': conversion_rate,
+            })
+
+        result.sort(key=lambda x: x['favorites_count'], reverse=True)
+
+        return Response({
+            'favorites': result[:10],
+        })
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# Analytics Alerts
+# ═══════════════════════════════════════════════════════════════════════════
+class AnalyticsAlertsView(views.APIView):
+    """GET  /api/admin/analytics/alerts/   — جلب كل التنبيهات (مرتبة بالأحدث أولاً)"""
+    permission_classes = [IsAdminRole]
+
+    def get(self, request):
+        limit = int(request.query_params.get('limit', 50))
+        unread_only = request.query_params.get('unread_only', '').lower() in ('1', 'true', 'yes')
+
+        qs = AnalyticsAlert.objects.all()
+        if unread_only:
+            qs = qs.filter(is_read=False)
+
+        alerts_data = [
+            {
+                'id': a.id,
+                'alert_type': a.alert_type,
+                'severity': a.severity,
+                'message': a.message,
+                'detail': a.detail,
+                'is_read': a.is_read,
+                'created_at': a.created_at.isoformat(),
+                'read_at': a.read_at.isoformat() if a.read_at else None,
+                'threshold_pct': a.threshold_pct,
+                'actual_value': a.actual_value,
+                'previous_value': a.previous_value,
+            }
+            for a in qs[:limit]
+        ]
+
+        return Response({
+            'alerts': alerts_data,
+            'unread_count': AnalyticsAlert.objects.filter(is_read=False).count(),
+            'total_count': AnalyticsAlert.objects.count(),
+        })
+
+
+class AnalyticsAlertReadView(views.APIView):
+    """POST /api/admin/analytics/alerts/{id}/read/ — وضع علامة مقروء على تنبيه"""
+    permission_classes = [IsAdminRole]
+
+    def post(self, request, pk):
+        try:
+            alert = AnalyticsAlert.objects.get(pk=pk)
+        except AnalyticsAlert.DoesNotExist:
+            return Response({'error': 'Alert not found'}, status=404)
+        if not alert.is_read:
+            alert.is_read = True
+            alert.read_at = timezone.now()
+            alert.save(update_fields=['is_read', 'read_at'])
+        return Response({'ok': True, 'id': alert.id})
+
+
+class AnalyticsAlertReadAllView(views.APIView):
+    """POST /api/admin/analytics/alerts/read-all/ — وضع علامة مقروء على جميع التنبيهات"""
+    permission_classes = [IsAdminRole]
+
+    def post(self, request):
+        updated = AnalyticsAlert.objects.filter(is_read=False).update(
+            is_read=True,
+            read_at=timezone.now(),
+        )
+        return Response({'ok': True, 'marked_read': updated})
+
+
+class AnalyticsTriggerAlertsView(views.APIView):
+    """POST /api/admin/analytics/alerts/trigger/ — تشغيل محرك التنبيهات يدوياً"""
+    permission_classes = [IsAdminRole]
+
+    def post(self, request):
+        from .alert_engine import run_alert_engine
+        fired = run_alert_engine()
+        return Response({
+            'ok': True,
+            'fired': fired,
+            'count': len(fired),
+            'message': f'تم إنشاء {len(fired)} تنبيه جديد' if fired else 'لا توجد تنبيهات جديدة في الوقت الحالي',
+        })

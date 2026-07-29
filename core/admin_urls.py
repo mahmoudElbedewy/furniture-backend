@@ -36,6 +36,16 @@ urlpatterns = [
     path('analytics/settings/', analytics_views.AnalyticsSettingsView.as_view(), name='admin-analytics-settings'),
     path('analytics/sync-now/', analytics_views.AnalyticsSyncNowView.as_view(), name='admin-analytics-sync-now'),
     path('analytics/meta/oauth/start/', meta_oauth_views.MetaOAuthStartView.as_view(), name='admin-analytics-meta-oauth-start'),
+    path('analytics/sales/funnel/', analytics_views.AnalyticsSalesFunnelView.as_view(), name='admin-analytics-sales-funnel'),
+    path('analytics/products/top/', analytics_views.AnalyticsProductsTopView.as_view(), name='admin-analytics-products-top'),
+    path('analytics/products/categories/', analytics_views.AnalyticsProductsCategoriesView.as_view(), name='admin-analytics-products-categories'),
+    path('analytics/products/underperforming/', analytics_views.AnalyticsProductsUnderperformingView.as_view(), name='admin-analytics-products-underperforming'),
+    path('analytics/favorites/', analytics_views.AnalyticsFavoritesView.as_view(), name='admin-analytics-favorites'),
+    # Alerts
+    path('analytics/alerts/', analytics_views.AnalyticsAlertsView.as_view(), name='admin-analytics-alerts'),
+    path('analytics/alerts/read-all/', analytics_views.AnalyticsAlertReadAllView.as_view(), name='admin-analytics-alerts-read-all'),
+    path('analytics/alerts/trigger/', analytics_views.AnalyticsTriggerAlertsView.as_view(), name='admin-analytics-alerts-trigger'),
+    path('analytics/alerts/<int:pk>/read/', analytics_views.AnalyticsAlertReadView.as_view(), name='admin-analytics-alert-read'),
 
     path('api/meta/oauth/callback/', meta_oauth_views.MetaOAuthCallbackView.as_view(), name='meta-oauth-callback'),
 ]
