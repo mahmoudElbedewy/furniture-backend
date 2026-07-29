@@ -23,7 +23,6 @@ urlpatterns = [
     path('api/analytics/bridge/sync/', analytics_bridge_views.trigger_sync),
     path('api/track-funnel-event/', TrackFunnelEventView.as_view(), name='track-funnel-event'),
     path('api/meta/oauth/callback/', meta_oauth_views.MetaOAuthCallbackView.as_view(), name='meta-oauth-callback'),
-    path('api/meta/diagnose/', meta_oauth_views.MetaOAuthDiagnoseView.as_view(), name='meta-oauth-diagnose'),
 
 ]
 
