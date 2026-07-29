@@ -170,3 +170,35 @@ class MetaOAuthCallbackView(views.APIView):
             return redirect(_settings_redirect("success"))
         except requests.RequestException as exc:
             return redirect(_settings_redirect("error", str(exc)[:100]))
+
+
+class MetaOAuthDiagnoseView(views.APIView):
+    permission_classes = [permissions.AllowAny]
+
+    def get(self, request):
+        import socket
+        res = {}
+        # 1. DNS check
+        try:
+            ip = socket.gethostbyname('graph.facebook.com')
+            res['dns'] = {'ok': True, 'ip': ip}
+        except Exception as e:
+            res['dns'] = {'ok': False, 'error': str(e)}
+
+        # 2. Direct HTTPS check
+        try:
+            r = requests.get('https://graph.facebook.com', timeout=10)
+            res['http_direct'] = {'ok': True, 'status_code': r.status_code, 'text': r.text[:200]}
+        except Exception as e:
+            res['http_direct'] = {'ok': False, 'error': str(e)}
+
+        # 3. User agent / Custom Session test
+        try:
+            s = requests.Session()
+            s.headers.update({'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)'})
+            r = s.get('https://graph.facebook.com/v19.0/me', timeout=10)
+            res['http_user_agent'] = {'ok': True, 'status_code': r.status_code, 'text': r.text[:200]}
+        except Exception as e:
+            res['http_user_agent'] = {'ok': False, 'error': str(e)}
+
+        return Response(res)
