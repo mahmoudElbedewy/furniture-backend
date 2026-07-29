@@ -49,6 +49,4 @@ urlpatterns = [
     path('analytics/alerts/read-all/', analytics_views.AnalyticsAlertReadAllView.as_view(), name='admin-analytics-alerts-read-all'),
     path('analytics/alerts/trigger/', analytics_views.AnalyticsTriggerAlertsView.as_view(), name='admin-analytics-alerts-trigger'),
     path('analytics/alerts/<int:pk>/read/', analytics_views.AnalyticsAlertReadView.as_view(), name='admin-analytics-alert-read'),
-
-    path('api/meta/oauth/callback/', meta_oauth_views.MetaOAuthCallbackView.as_view(), name='meta-oauth-callback'),
 ]

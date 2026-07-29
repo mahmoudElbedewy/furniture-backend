@@ -5,6 +5,7 @@ from django.conf.urls.static import static
 from drf_spectacular.views import SpectacularAPIView, SpectacularSwaggerView
 from core.track_views import TrackVisitView, TrackFunnelEventView
 from core import analytics_bridge_views
+from core import meta_oauth_views
 
 
 urlpatterns = [
@@ -21,6 +22,7 @@ urlpatterns = [
     path('api/track-visit/', TrackVisitView.as_view(), name='track-visit'),
     path('api/analytics/bridge/sync/', analytics_bridge_views.trigger_sync),
     path('api/track-funnel-event/', TrackFunnelEventView.as_view(), name='track-funnel-event'),
+    path('api/meta/oauth/callback/', meta_oauth_views.MetaOAuthCallbackView.as_view(), name='meta-oauth-callback'),
 
 ]
 
