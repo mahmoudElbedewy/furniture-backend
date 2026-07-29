@@ -2,7 +2,7 @@ from django.contrib import admin
 from django.utils import timezone
 from django.contrib import messages
 from .models import AgentSettings, AgentActionRequest
-
+from .models import AgentSettings, AgentActionRequest, SyncLog
 
 @admin.register(AgentSettings)
 class AgentSettingsAdmin(admin.ModelAdmin):
@@ -33,3 +33,13 @@ class AgentActionRequestAdmin(admin.ModelAdmin):
         )
         self.message_user(request, f"تم رفض {updated} طلب.", messages.WARNING)
     reject_requests.short_description = "❌ رفض الطلبات المختارة"
+
+@admin.register(SyncLog)
+class SyncLogAdmin(admin.ModelAdmin):
+    list_display = ('source', 'status', 'started_at', 'finished_at')
+    list_filter = ('source', 'status')
+    readonly_fields = ('source', 'status', 'message', 'started_at', 'finished_at')
+    ordering = ('-finished_at',)
+
+    def has_add_permission(self, request):
+        return False

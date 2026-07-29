@@ -28,6 +28,7 @@ class AgentSettings(models.Model):
     ga4_service_account_json = models.TextField(blank=True, default='')
     is_ga4_connected = models.BooleanField(default=False)
     last_ga4_sync = models.DateTimeField(null=True, blank=True)
+    meta_token_expires_at = models.DateTimeField(null=True, blank=True)
 
     def save(self, *args, **kwargs):
         self.pk = 1  
@@ -186,3 +187,27 @@ class GATopPage(models.Model):
 
     class Meta:
         unique_together = ('date', 'page_path')
+
+class SyncLog(models.Model):
+    """سجل كل محاولة مزامنة (يدوية أو من الـ cron) — لمراقبة الفشل بمرور الوقت."""
+    SOURCE_CHOICES = (
+        ('facebook', 'Facebook'),
+        ('ga4', 'Google Analytics 4'),
+    )
+    STATUS_CHOICES = (
+        ('success', 'نجاح'),
+        ('failure', 'فشل'),
+    )
+
+    source = models.CharField(max_length=20, choices=SOURCE_CHOICES)
+    status = models.CharField(max_length=10, choices=STATUS_CHOICES)
+    message = models.TextField(blank=True, default='')
+    started_at = models.DateTimeField()
+    finished_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        ordering = ['-finished_at']
+        indexes = [models.Index(fields=['source', 'finished_at'])]
+
+    def __str__(self):
+        return f"{self.get_source_display()} - {self.get_status_display()} @ {self.finished_at}"

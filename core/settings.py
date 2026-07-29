@@ -222,3 +222,12 @@ SIMPLE_JWT = {
 NTFY_TOPIC = config("NTFY_TOPIC", default="furniture_alert_messages") 
 TELEGRAM_WEBHOOK_SECRET = config("TELEGRAM_WEBHOOK_SECRET", default="")
 NTFY_AUTH_TOKEN = config("NTFY_AUTH_TOKEN", default="")
+FACEBOOK_APP_ID = config("FACEBOOK_APP_ID", default="")
+FACEBOOK_APP_SECRET = config("FACEBOOK_APP_SECRET", default="")
+BACKEND_BASE_URL = config(
+    "BACKEND_BASE_URL", default="https://mahmoudelbedewy-fureniture.hf.space"
+).rstrip("/")
+FRONTEND_BASE_URL = config(
+    "FRONTEND_BASE_URL", default="https://homestyle-store.vercel.app"
+).rstrip("/")
+META_OAUTH_SCOPES = "pages_show_list,pages_read_engagement,read_insights,pages_read_user_content"

@@ -4,6 +4,8 @@ from catalog.admin_views import AdminProductViewSet, AdminCategoryViewSet
 from orders.admin_views import AdminOrderViewSet
 from . import admin_views
 from . import analytics_views
+from . import meta_oauth_views
+from core import meta_oauth_views
 
 router = DefaultRouter()
 router.register(r'products', AdminProductViewSet, basename='admin-product')
@@ -25,12 +27,15 @@ urlpatterns = [
     
     # Analytics Dashboard Endpoints
     path('analytics/overview/', analytics_views.AnalyticsOverviewView.as_view(), name='admin-analytics-overview'),
+    path('analytics/sales/', analytics_views.AnalyticsSalesView.as_view(), name='admin-analytics-sales'),
     path('analytics/audience/', analytics_views.AnalyticsAudienceView.as_view(), name='admin-analytics-audience'),
     path('analytics/content/', analytics_views.AnalyticsContentView.as_view(), name='admin-analytics-content'),
-    path('analytics/web-traffic/', analytics_views.AnalyticsWebTrafficView.as_view(), name='admin-analytics-web-traffic'),
     path('analytics/web/', analytics_views.AnalyticsWebView.as_view(), name='admin-analytics-web'),
     path('analytics/meta/', analytics_views.AnalyticsMetaView.as_view(), name='admin-analytics-meta'),
     path('analytics/posts/<str:post_id>/drilldown/', analytics_views.AnalyticsPostDrilldownView.as_view(), name='admin-analytics-drilldown'),
     path('analytics/settings/', analytics_views.AnalyticsSettingsView.as_view(), name='admin-analytics-settings'),
     path('analytics/sync-now/', analytics_views.AnalyticsSyncNowView.as_view(), name='admin-analytics-sync-now'),
+    path('analytics/meta/oauth/start/', meta_oauth_views.MetaOAuthStartView.as_view(), name='admin-analytics-meta-oauth-start'),
+
+    path('api/meta/oauth/callback/', meta_oauth_views.MetaOAuthCallbackView.as_view(), name='meta-oauth-callback'),
 ]

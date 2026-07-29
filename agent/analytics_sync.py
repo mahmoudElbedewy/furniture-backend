@@ -3,7 +3,7 @@ from datetime import datetime
 from django.utils import timezone
 from .models import (
     AgentSettings, FacebookPostMetric, DailyMetricSnapshot,
-    GACampaignSession, GADailyTraffic, GATopPage,
+    GACampaignSession, GADailyTraffic, GATopPage, SyncLog,
 )
 
 GRAPH_API_BASE = 'https://graph.facebook.com/v25.0'
@@ -34,8 +34,6 @@ def sync_facebook(settings: AgentSettings):
     accounts = _graph_get('me/accounts', token)
     page_token = token
     
-    # If accounts returns an error (e.g. if the token is already a Page Access Token), 
-    # we don't fail immediately. We will test the token directly on the page_info endpoint.
     if accounts and 'data' in accounts:
         for page in accounts['data']:
             if str(page.get('id')) == str(page_id):
@@ -264,16 +262,37 @@ def sync_ga4(settings: AgentSettings):
     settings.save(update_fields=['is_ga4_connected', 'last_ga4_sync'])
     return {'ok': True}
 
+def _sync_success_message(source: str, result: dict) -> str:
+    if source == 'facebook':
+        return f"تمت مزامنة {result.get('posts_synced', 0)} منشور بنجاح."
+    return 'تمت المزامنة بنجاح.'
+
+
+def _log_sync(source: str, started_at, result: dict):
+    ok = bool(result.get('ok'))
+    SyncLog.objects.create(
+        source=source,
+        status='success' if ok else 'failure',
+        message=_sync_success_message(source, result) if ok else (result.get('error') or 'فشل غير معروف'),
+        started_at=started_at,
+    )
 
 def sync_all():
     settings = AgentSettings.load()
     results = {}
+
+    fb_started_at = timezone.now()
     if settings.meta_access_token and settings.fb_page_id:
         results['facebook'] = sync_facebook(settings)
     else:
         results['facebook'] = {'ok': False, 'error': 'Missing Meta token/page id'}
+    _log_sync('facebook', fb_started_at, results['facebook'])
+
+    ga4_started_at = timezone.now()
     if settings.ga4_property_id and settings.ga4_service_account_json:
         results['ga4'] = sync_ga4(settings)
     else:
         results['ga4'] = {'ok': False, 'error': 'Missing GA4 property id / service account'}
+    _log_sync('ga4', ga4_started_at, results['ga4'])
+
     return results

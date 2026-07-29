@@ -295,6 +295,104 @@ class AnalyticsOverviewView(views.APIView):
             'missingData': missing_data,
         })
 
+# ═══════════════════════════════════════════════════════════════════════════
+# Sales & Orders Analytics
+# ═══════════════════════════════════════════════════════════════════════════
+class AnalyticsSalesView(views.APIView):
+    permission_classes = [IsAdminRole]
+
+    def get(self, request):
+        from django.db.models.functions import TruncDate
+
+        start, end, prev_start, prev_end = parse_date_range(request)
+
+        orders = Order.objects.filter(created_at__date__range=(start, end))
+        prev_orders = Order.objects.filter(created_at__date__range=(prev_start, prev_end))
+
+        total_revenue = orders.aggregate(v=Sum('total_price'))['v'] or 0
+        prev_revenue = prev_orders.aggregate(v=Sum('total_price'))['v'] or 0
+        orders_count = orders.count()
+        prev_orders_count = prev_orders.count()
+        aov = round(float(total_revenue) / orders_count, 2) if orders_count else 0.0
+        prev_aov = round(float(prev_revenue) / prev_orders_count, 2) if prev_orders_count else 0.0
+
+        status_labels = dict(Order.STATUS_CHOICES)
+        status_rows = orders.values('status').annotate(count=Count('id')).order_by('-count')
+        orders_by_status = [
+            {
+                'status': row['status'],
+                'label': status_labels.get(row['status'], row['status']),
+                'count': row['count'],
+            }
+            for row in status_rows
+        ]
+
+        daily_rows = (
+            orders.annotate(day=TruncDate('created_at'))
+            .values('day')
+            .annotate(revenue=Sum('total_price'), count=Count('id'))
+            .order_by('day')
+        )
+        daily_revenue = [
+            {'date': str(row['day']), 'revenue': float(row['revenue'] or 0), 'orders': row['count']}
+            for row in daily_rows
+        ]
+
+        governorate_rows = (
+            orders.values('customer_governorate')
+            .annotate(
+                orders_count=Count('id'),
+                total_revenue=Sum('total_price'),
+                avg_shipping=Avg('shipping_price'),
+            )
+            .order_by('-orders_count')
+        )
+        by_governorate = [
+            {
+                'governorate': row['customer_governorate'] or 'غير محدد',
+                'ordersCount': row['orders_count'],
+                'totalRevenue': float(row['total_revenue'] or 0),
+                'avgShipping': round(float(row['avg_shipping'] or 0), 2),
+            }
+            for row in governorate_rows
+        ]
+
+        deposit_orders_count = orders.filter(deposit_amount__gt=0).count()
+        deposit_rate = round((deposit_orders_count / orders_count) * 100, 1) if orders_count else 0.0
+
+        cancelled_orders = orders.filter(status='cancelled')
+        cancelled_with_deposit_count = cancelled_orders.filter(deposit_amount__gt=0).count()
+        deposit_cancelled_rate = (
+            round((cancelled_with_deposit_count / orders_count) * 100, 1) if orders_count else 0.0
+        )
+
+        return Response({
+            'totalRevenue': float(total_revenue),
+            'revenueTrend': pct_change(float(total_revenue), float(prev_revenue)),
+            'ordersCount': orders_count,
+            'ordersCountTrend': pct_change(orders_count, prev_orders_count),
+            'aov': aov,
+            'aovTrend': pct_change(aov, prev_aov),
+            'ordersByStatus': orders_by_status,
+            'dailyRevenue': daily_revenue,
+            'byGovernorate': by_governorate,
+            'depositStats': {
+                'depositOrdersRate': deposit_rate,
+                'cancelledWithDepositRate': deposit_cancelled_rate,
+                'note': (
+                    'لا يوجد حقل مخصص لسبب الإلغاء في الموديل الحالي، فهذه النسبة '
+                    'تقريبية: طلبات اتلغت وكانت أصلاً عليها ديبوزيت مطلوب.'
+                ),
+            },
+            'dataAvailability': {
+                'sales': _availability(
+                    orders.exists(), 'orders', 'لا توجد طلبات في هذه الفترة.'
+                ),
+            },
+            'missingData': [] if orders.exists() else [
+                _missing('sales', 'Sales analytics', 'لا توجد طلبات مسجلة في هذه الفترة الزمنية.')
+            ],
+        })
 
 # ═══════════════════════════════════════════════════════════════════════════
 # Audience Tab
@@ -427,61 +525,7 @@ class AnalyticsContentView(views.APIView):
         })
 
 
-# ═══════════════════════════════════════════════════════════════════════════
-# Web Traffic Tab (legacy)
-# ═══════════════════════════════════════════════════════════════════════════
-class AnalyticsWebTrafficView(views.APIView):
-    permission_classes = [IsAdminRole]
 
-    def get(self, request):
-        start, end, *_ = parse_date_range(request)
-        traffic = GADailyTraffic.objects.filter(date__range=(start, end)).order_by('date')
-        top_pages = (
-            GATopPage.objects.filter(date__range=(start, end))
-            .values('page_path')
-            .annotate(total_views=Sum('views'), total_unique=Sum('unique_visitors'),
-                      avg_bounce=Avg('bounce_rate'), avg_duration=Avg('avg_duration_seconds'))
-            .order_by('-total_views')[:10]
-        )
-
-        agg = traffic.aggregate(
-            sessions=Sum('sessions'), bounce=Avg('bounce_rate'), duration=Avg('avg_session_duration_seconds'),
-        )
-        if not traffic.exists():
-            return Response({
-                'metrics': {
-                    'totalSessions': None,
-                    'bounceRate': None,
-                    'avgSessionDuration': None,
-                },
-                'dailyTrend': [],
-                'topPages': [],
-                'dataAvailability': {
-                    'ga4': _availability(False, None, 'لا توجد بيانات GA4 لهذه الفترة.'),
-                },
-                'missingData': [
-                    _missing('ga4', 'GA4 web traffic', 'اربط GA4 وشغّل المزامنة لعرض Web Traffic.')
-                ],
-            })
-        duration_s = agg['duration'] or 0
-        return Response({
-            'metrics': {
-                'totalSessions': agg['sessions'] or 0,
-                'bounceRate': round(agg['bounce'] or 0, 1),
-                'avgSessionDuration': f"{int(duration_s // 60)}:{int(duration_s % 60):02d}",
-            },
-            'dailyTrend': [{'date': str(t.date), 'sessions': t.sessions} for t in traffic],
-            'topPages': [
-                {'name': tp['page_path'], 'views': tp['total_views'], 'uniqueVisitors': tp['total_unique'],
-                 'bounceRate': round(tp['avg_bounce'], 1),
-                 'avgDuration': f"{int(tp['avg_duration'] // 60)}:{int(tp['avg_duration'] % 60):02d}"}
-                for tp in top_pages
-            ],
-            'dataAvailability': {
-                'ga4': _availability(True, 'ga4'),
-            },
-            'missingData': [],
-        })
 
 
 # ═══════════════════════════════════════════════════════════════════════════
