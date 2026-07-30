@@ -17,6 +17,7 @@ from .tools import (
     check_deposit_requirements,
     get_product_details,
     list_catalog_products,
+    get_product_variants,
 )
 from django.core.cache import cache
 from catalog.models import Product, Governorate, Category
@@ -32,6 +33,7 @@ TOOLS = [
     check_deposit_requirements,
     get_product_details,
     list_catalog_products,
+    get_product_variants
 ]
 TOOLS_BY_NAME = {t.name: t for t in TOOLS}
 
@@ -94,6 +96,23 @@ def _fetch_governorate_names() -> list[str]:
     cache.set("agent_governorate_names_v1", names, 60 * 30)
     return names
 
+DISCOUNT_PATTERNS = [
+    r"خصم", r"تخفيض", r"تنزل", r"تنزيل",
+    r"سعر\s+(احسن|أحسن|اقل|أقل)", r"اقل\s+سعر", r"أقل\s+سعر",
+    r"تقدر\s+تعمل\s+سعر", r"تعمل\s+لي\s+سعر", r"فاصل", r"فاصلني",
+]
+
+
+def _is_discount_request(text: str) -> bool:
+    blob = _text_blob(text)
+    return any(re.search(p, blob, re.IGNORECASE) for p in DISCOUNT_PATTERNS)
+
+
+def _agent_already_declined_discount(history_messages: list) -> bool:
+    for msg in reversed(history_messages[-6:]):
+        if msg.get("role") == "agent" and "الأسعار عندنا ثابتة" in msg.get("content", ""):
+            return True
+    return False
 
 @database_sync_to_async
 def _fetch_category_keywords() -> dict:
@@ -435,10 +454,33 @@ async def _build_order_quote(
             "ابعت المحافظة والعنوان مرة تانية."
         )
 
-    deposit_str = await check_deposit_requirements.ainvoke({"product_ids": [product_id]})
     shipping_str = await get_shipping_options.ainvoke(
         {"product_ids": [product_id], "governorate": governorate}
     )
+    try:
+        shipping_data = ast.literal_eval(shipping_str)
+    except (SyntaxError, ValueError, TypeError):
+        shipping_data = {}
+
+    options = []
+    if isinstance(shipping_data, dict):
+        for _title, opts in shipping_data.items():
+            if opts:
+                options = opts
+                break
+
+    distinct_prices = {opt["price"] for opt in options}
+    if len(options) > 1 and len(distinct_prices) > 1:
+        lines = ["لقيت أكتر من منطقة شحن في محافظتك، ابعتلي منطقتك بالظبط من دول:"]
+        for opt in options:
+            lines.append(f"- {opt['location']}: {opt['price']:.0f} جنيه")
+        return "\n".join(lines)
+
+    shipping_price, shipping_location = (
+        (options[0]["price"], options[0]["location"]) if options else (0.0, governorate)
+    )
+
+    deposit_str = await check_deposit_requirements.ainvoke({"product_ids": [product_id]})
 
     product_price = 0.0
     if product_details:
@@ -453,7 +495,6 @@ async def _build_order_quote(
         except Product.DoesNotExist:
             return "المنتج مش متوفر دلوقتي."
 
-    shipping_price, shipping_location = _parse_shipping_price(shipping_str)
     total = product_price + shipping_price
     has_deposit, deposit_amount, deposit_note = _parse_deposit_info(deposit_str)
 
@@ -477,11 +518,12 @@ async def _build_order_quote(
                 f"الديبوزيت المطلوب: {deposit_amount:.0f} جنيه",
                 f"حوّل الديبوزيت على: {DEPOSIT_WHATSAPP}",
                 f"وابعت screenshot التحويل على الواتساب: {DEPOSIT_WHATSAPP}",
-                "تقدر تتابع معانا من هناك.",
+                "هنكمل الأوردر معاك من هناك على الواتساب، الأوردرات اللي فيها ديبوزيت بتتأكد من هناك بس.",
             ]
         )
         if deposit_note:
             lines.append(f"ملاحظة: {deposit_note}")
+        return "\n".join(lines)  
 
     lines.extend(["", "أنفذ الأوردر؟"])
     return "\n".join(lines)
@@ -590,6 +632,18 @@ async def get_agent_reply(
 ) -> str:
     await asyncio.sleep(random.uniform(0.5, 1.0))
 
+    if _is_discount_request(customer_message):
+        if _agent_already_declined_discount(history_messages):
+            await escalate_to_admin.ainvoke({
+                "conversation_id": str(conversation.id),
+                "situation_summary": "العميل بيصر على طلب خصم في السعر.",
+                "suggested_reply": "تابع مع العميل يدوياً بخصوص طلب التخفيض.",
+            })
+            return _clean_response(
+                "تمام، هحولك لواحد من فريقنا يقدر يتابع معاك الموضوع، هيتواصل معاك في أقرب وقت."
+            )
+        return "الأسعار عندنا ثابتة وما بنعملش تخفيض للأسف، بس المنتج يستاهل. تحب نكمل نجهزلك الأوردر؟"
+
     if _is_search_intent(customer_message):
         return _clean_response(await _handle_product_search(customer_message))
 
@@ -678,3 +732,4 @@ async def get_agent_reply(
                 )
 
     return _build_order_start_reply(context_data, product_details)
+

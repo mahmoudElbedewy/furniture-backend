@@ -440,3 +440,21 @@ async def answer_general_policy(question_type: str) -> str:
         question_type,
         "السياسة غير متوفرة. صعّد للأدمن إذا لزم الأمر.",
     )
+@tool
+async def get_product_variants(product_id: str) -> str:
+    """يرجع كل المقاسات المتاحة لمنتج وأسعارها. استخدمها قبل عرض ملخص الأوردر."""
+
+    @database_sync_to_async
+    def _get():
+        try:
+            product = Product.objects.get(id=product_id, is_available=True)
+        except Product.DoesNotExist:
+            return "عذراً، المنتج غير موجود أو غير متوفر."
+        variants = list(
+            product.variants.filter(is_available=True).values("size_name", "price")
+        )
+        if not variants:
+            return "لا يوجد مقاسات متعددة لهذا المنتج."
+        return str(variants)
+
+    return await _get()
