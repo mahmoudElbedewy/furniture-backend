@@ -356,15 +356,19 @@ async def create_order_from_chat(
     governorate: str,
     address: str,
     product_ids: list[str],
+    variant_ids: list[str] = None,
     shipping_total: float = 0,
     shipping_location: str = "",
     conversation_id: str = None,
 ) -> str:
     """ينشئ أوردر جديد للعميل بعد تجميع بياناته كاملة.
-    ⚠️ لازم تكون استخدمت check_deposit_requirements و get_shipping_options قبلها."""
+    ⚠️ لازم تكون استخدمت check_deposit_requirements و get_shipping_options قبلها.
+    لو المنتج له مقاسات، ابعت variant_ids بنفس ترتيب product_ids (استخدم "" لو مفيش مقاس)."""
 
     @database_sync_to_async
     def _create():
+        from catalog.models import ProductVariant
+
         products = list(Product.objects.filter(id__in=product_ids, is_available=True))
         if not products:
             return "عذراً، المنتجات المطلوبة غير متوفرة حالياً."
@@ -378,8 +382,28 @@ async def create_order_from_chat(
                 "عشان ترفع صورة الإيصال، وإحنا هنتابع معاك أول ما يوصلنا."
             )
 
+        variant_ids_list = variant_ids or []
+        variant_map = {
+            str(product_ids[i]): variant_ids_list[i]
+            for i in range(min(len(product_ids), len(variant_ids_list)))
+            if variant_ids_list[i]
+        }
+
         with transaction.atomic():
-            products_total = sum(p.final_price for p in products)
+            resolved = []
+            products_total = Decimal("0")
+            for p in products:
+                variant = None
+                vid = variant_map.get(str(p.id))
+                if vid:
+                    try:
+                        variant = ProductVariant.objects.get(id=vid, product=p, is_available=True)
+                    except ProductVariant.DoesNotExist:
+                        variant = None
+                unit_price = variant.price if variant else p.final_price
+                products_total += unit_price
+                resolved.append((p, variant, unit_price))
+
             shipping = Decimal(str(shipping_total or 0))
             total_price = products_total + shipping
 
@@ -393,13 +417,15 @@ async def create_order_from_chat(
                 status="pending_review",
             )
 
-            per_item_shipping = shipping / len(products) if products else Decimal("0")
-            for p in products:
+            per_item_shipping = shipping / len(resolved) if resolved else Decimal("0")
+            for p, variant, unit_price in resolved:
                 OrderItem.objects.create(
                     order=order,
                     product=p,
+                    variant=variant,
+                    variant_size_name=variant.size_name if variant else None,
                     quantity=1,
-                    price_at_order_time=p.final_price,
+                    price_at_order_time=unit_price,
                     shipping_price=per_item_shipping,
                     shipping_location=shipping_location or governorate,
                 )
@@ -426,7 +452,6 @@ async def create_order_from_chat(
         )
 
     return await _create()
-
 
 @tool
 async def answer_general_policy(question_type: str) -> str:

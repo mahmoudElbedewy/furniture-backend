@@ -274,7 +274,29 @@ def _should_collect_order_details(customer_message: str, history_messages: list)
     return _is_order_intent(customer_message)
 
 
-def _parse_customer_details(text: str, governorate_names: list[str]) -> tuple[str, str, str, str]:
+def _find_customer_name_from_history(history_messages: list, governorate_names: list[str]) -> str:
+    """يدور في آخر رسائل العميل عن رسالة اسم صريحة."""
+    for msg in reversed(history_messages[-10:]):
+        if msg.get("role") != "customer":
+            continue
+        content = (msg.get("content") or "").strip()
+        if not content or len(content) > 40:
+            continue
+        if PHONE_PATTERN.search(content):
+            continue
+        if _has_order_details(content):
+            continue
+        blob = _normalize_arabic(content)
+        if any(_normalize_arabic(g) in blob for g in governorate_names):
+            continue
+        if len(content.split()) <= 4 and not _is_search_intent(content) and not _is_order_intent(content):
+            return content
+    return "عميل"
+
+
+def _parse_customer_details(
+    text: str, governorate_names: list[str], history_messages: list | None = None
+) -> tuple[str, str, str, str]:
     phone_match = PHONE_PATTERN.search(text)
     phone = phone_match.group(0) if phone_match else ""
 
@@ -287,7 +309,7 @@ def _parse_customer_details(text: str, governorate_names: list[str]) -> tuple[st
     lines = [ln.strip() for ln in text.splitlines() if ln.strip()]
 
     if len(lines) > 1:
-        name, name_found, address_lines = "عميل", False, []
+        name, name_found, address_lines = "", False, []
         for line in lines:
             is_phone_line = bool(PHONE_PATTERN.search(line))
             is_gov_line = bool(governorate) and governorate in line
@@ -297,13 +319,28 @@ def _parse_customer_details(text: str, governorate_names: list[str]) -> tuple[st
             if not is_phone_line and not is_gov_line:
                 address_lines.append(line)
         address = " - ".join(address_lines) if address_lines else text
-        return name, phone, governorate, address
+    else:
+        remaining = text.replace(phone, "").strip() if phone else text.strip()
+        if governorate:
+            remaining = remaining.replace(governorate, "").strip()
+        name = ""
+        address = remaining
 
-    remaining = text.replace(phone, "").strip() if phone else text.strip()
-    parts = remaining.split()
-    name = parts[0] if parts else "عميل"
-    address = remaining[len(name):].strip() if name in remaining else remaining
+    if not name:
+        name = _find_customer_name_from_history(history_messages or [], governorate_names) if history_messages else "عميل"
+
     return name, phone, governorate, address
+
+STOP_WORDS = {
+    "عايز", "عاوز", "حابب", "نفسي", "محتاج", "عايزة", "عاوزة",
+    "اعرضلي", "اعرضلى", "اعرض", "عرضلي", "وريني", "ورينى",
+    "منتج", "منتجات", "حاجة", "حاجه", "اي", "أي", "اى",
+    "في", "فيه", "موجود", "دور", "دورلي", "دورلى", "ابحث",
+    "بسعر", "باسعار", "سعر", "اسعار", "أسعار",
+    "تحت", "اقل", "أقل", "اكتر", "أكثر", "فوق",
+    "من", "جنيه", "جنية", "على", "علي", "تاني", "تانى", "تانيه",
+    "ال", "او", "أو", "و", "يا", "لو", "سمحت", "ممكن",
+}
 
 async def _parse_search_params(text: str) -> dict:
     blob = _text_blob(text)
@@ -313,31 +350,62 @@ async def _parse_search_params(text: str) -> dict:
     for norm_keyword, category in category_keywords.items():
         if norm_keyword in blob:
             params["category"] = category
-            params["query"] = category
             break
 
-    max_match = re.search(r"(?:تحت|اقل|أقل|اقل\s+من|less\s+than|below)\s*(\d+)", blob)
+    max_match = re.search(r"(?:تحت|اقل\s+من|أقل\s+من|اقل|أقل|less\s+than|below)\s*(\d+)", blob)
     if max_match:
         params["max_price"] = float(max_match.group(1))
-    min_match = re.search(r"(?:فوق|اكتر|أكثر|more\s+than|above)\s*(\d+)", blob)
+    min_match = re.search(r"(?:فوق|اكتر\s+من|أكثر\s+من|اكتر|أكثر|more\s+than|above)\s*(\d+)", blob)
     if min_match:
         params["min_price"] = float(min_match.group(1))
-    if not params["query"]:
-        params["query"] = text.strip()[:50]
+
+    words = re.findall(r"[^\W\d_]+", text, flags=re.UNICODE)
+    keywords = [w for w in words if _normalize_arabic(w) not in STOP_WORDS and len(w) > 1]
+    params["query"] = "" if params["category"] else " ".join(keywords)[:50]
 
     return {k: v for k, v in params.items() if v is not None}
 
-def _parse_shipping_price(shipping_str: str) -> tuple[float, str]:
+
+@database_sync_to_async
+def _fetch_product_variants(product_id: str) -> list[dict]:
+    try:
+        product = Product.objects.get(id=product_id, is_available=True)
+    except Product.DoesNotExist:
+        return []
+    return [
+        {"id": v.id, "size_name": v.size_name, "price": float(v.price)}
+        for v in product.variants.filter(is_available=True)
+    ]
+
+
+def _match_variant_from_text(text: str, variants: list[dict]) -> dict | None:
+    blob = _normalize_arabic(text)
+    for v in variants:
+        if _normalize_arabic(v["size_name"]) in blob:
+            return v
+    return None
+
+
+def _parse_shipping_options(shipping_str: str) -> list[dict]:
     try:
         data = ast.literal_eval(shipping_str)
         if isinstance(data, dict):
             for _title, options in data.items():
                 if options and isinstance(options, list):
-                    first = options[0]
-                    return float(first.get("price", 0)), str(first.get("location", ""))
+                    return options
     except (SyntaxError, ValueError, TypeError):
         pass
-    return 0.0, ""
+    return []
+
+
+def _match_shipping_option_from_address(address: str, options: list[dict]) -> dict | None:
+    blob = _normalize_arabic(address)
+    for opt in options:
+        parts = [p.strip() for p in opt.get("location", "").split(" - ")]
+        area = parts[1] if len(parts) > 1 else None
+        if area and _normalize_arabic(area) in blob:
+            return opt
+    return None
 
 
 def _parse_deposit_info(deposit_str: str) -> tuple[bool, float, str]:
@@ -403,7 +471,7 @@ def _build_order_start_reply(
     return "\n".join(lines)
 
 
-async def _handle_product_search(customer_message: str) -> str:
+async def _handle_product_search(customer_message: str) -> str | None:
     params = await _parse_search_params(customer_message)
     search_args = {"query": params.get("query", "")}
     if params.get("category"):
@@ -415,15 +483,15 @@ async def _handle_product_search(customer_message: str) -> str:
 
     results_str = await search_products.ainvoke(search_args)
     if results_str == "لا توجد منتجات مطابقة.":
-        return "مافيش منتجات مطابقة لطلبك دلوقتي. جرب تغيير السعر أو نوع المنتج."
+        return None  # سيب الموديل يجرب بالأدوات بدل ما نوقف هنا
 
     try:
         results = ast.literal_eval(results_str)
     except (SyntaxError, ValueError):
-        return "حصلت مشكلة في البحث. جرب تاني."
+        return None
 
     if not results:
-        return "مافيش منتجات مطابقة لطلبك دلوقتي."
+        return None
 
     product_ids = [str(r["id"]) for r in results]
     cards_str = await show_product_cards.ainvoke({"product_ids": product_ids})
@@ -438,15 +506,13 @@ async def _handle_product_search(customer_message: str) -> str:
     )
     return "\n".join(lines) + "\n\n" + cards_str
 
-
 async def _build_order_quote(
-    customer_message: str, context_data: dict, product_details: str | None
+    customer_message: str, context_data: dict, product_details: str | None, history_messages: list
 ) -> str:
     product_id = str(context_data.get("product_id", ""))
     product_name = context_data.get("product_name", "المنتج")
     governorate_names = await _fetch_governorate_names()
-    name, phone, governorate, address = _parse_customer_details(customer_message)
-
+    name, phone, governorate, address = _parse_customer_details(customer_message, governorate_names, history_messages)
     if not governorate:
         return (
             "تمام يا فندم، استلمت بياناتك.\n"
@@ -454,46 +520,46 @@ async def _build_order_quote(
             "ابعت المحافظة والعنوان مرة تانية."
         )
 
-    shipping_str = await get_shipping_options.ainvoke(
-        {"product_ids": [product_id], "governorate": governorate}
-    )
-    try:
-        shipping_data = ast.literal_eval(shipping_str)
-    except (SyntaxError, ValueError, TypeError):
-        shipping_data = {}
-
-    options = []
-    if isinstance(shipping_data, dict):
-        for _title, opts in shipping_data.items():
-            if opts:
-                options = opts
-                break
-
-    distinct_prices = {opt["price"] for opt in options}
-    if len(options) > 1 and len(distinct_prices) > 1:
-        lines = ["لقيت أكتر من منطقة شحن في محافظتك، ابعتلي منطقتك بالظبط من دول:"]
-        for opt in options:
-            lines.append(f"- {opt['location']}: {opt['price']:.0f} جنيه")
-        return "\n".join(lines)
-
-    shipping_price, shipping_location = (
-        (options[0]["price"], options[0]["location"]) if options else (0.0, governorate)
-    )
+    variants = await _fetch_product_variants(product_id)
+    selected_variant = None
+    if variants:
+        selected_variant = _match_variant_from_text(customer_message, variants)
+        if not selected_variant:
+            options_text = "\n".join(f"- {v['size_name']}: {v['price']:.0f} جنيه" for v in variants)
+            return f"تمام يا فندم، بس المنتج ده له أكتر من مقاس:\n{options_text}\n\nقولي عايز أنهي مقاس عشان أكمل معاك."
 
     deposit_str = await check_deposit_requirements.ainvoke({"product_ids": [product_id]})
+    shipping_str = await get_shipping_options.ainvoke({"product_ids": [product_id], "governorate": governorate})
 
-    product_price = 0.0
-    if product_details:
-        match = re.search(r"السعر:\s*([\d.]+)", product_details)
-        if match:
-            product_price = float(match.group(1))
-    if not product_price:
-        try:
-            product = await database_sync_to_async(Product.objects.get)(id=product_id)
-            product_price = float(product.final_price)
-            product_name = product.title
-        except Product.DoesNotExist:
-            return "المنتج مش متوفر دلوقتي."
+    if selected_variant:
+        product_price = selected_variant["price"]
+    else:
+        product_price = 0.0
+        if product_details:
+            match = re.search(r"السعر:\s*([\d.]+)", product_details)
+            if match:
+                product_price = float(match.group(1))
+        if not product_price:
+            try:
+                product = await database_sync_to_async(Product.objects.get)(id=product_id)
+                product_price = float(product.final_price)
+                product_name = product.title
+            except Product.DoesNotExist:
+                return "المنتج مش متوفر دلوقتي."
+
+    # -- منطقة الشحن --
+    shipping_options = _parse_shipping_options(shipping_str)
+    shipping_price, shipping_location = 0.0, ""
+    if len(shipping_options) == 1:
+        shipping_price = shipping_options[0].get("price", 0)
+        shipping_location = shipping_options[0].get("location", "")
+    elif len(shipping_options) > 1:
+        matched = _match_shipping_option_from_address(address, shipping_options)
+        if matched:
+            shipping_price, shipping_location = matched["price"], matched["location"]
+        else:
+            options_text = "\n".join(f"- {o['location']}: {o['price']:.0f} جنيه" for o in shipping_options)
+            return f"محتاج تحدد المنطقة بالظبط جوه {governorate} عشان أقولك سعر الشحن:\n{options_text}\n\nابعتلي اسم المنطقة."
 
     total = product_price + shipping_price
     has_deposit, deposit_amount, deposit_note = _parse_deposit_info(deposit_str)
@@ -506,28 +572,28 @@ async def _build_order_quote(
         f"العنوان: {address}",
         "",
         f"المنتج: {product_name}",
+    ]
+    if selected_variant:
+        lines.append(f"المقاس: {selected_variant['size_name']}")
+    lines += [
         f"سعر المنتج: {product_price:.0f} جنيه",
         f"الشحن ({shipping_location or governorate}): {shipping_price:.0f} جنيه",
         f"الإجمالي: {total:.0f} جنيه",
     ]
 
     if has_deposit and deposit_amount > 0:
-        lines.extend(
-            [
-                "",
-                f"الديبوزيت المطلوب: {deposit_amount:.0f} جنيه",
-                f"حوّل الديبوزيت على: {DEPOSIT_WHATSAPP}",
-                f"وابعت screenshot التحويل على الواتساب: {DEPOSIT_WHATSAPP}",
-                "هنكمل الأوردر معاك من هناك على الواتساب، الأوردرات اللي فيها ديبوزيت بتتأكد من هناك بس.",
-            ]
-        )
+        lines += [
+            "",
+            f"الديبوزيت المطلوب: {deposit_amount:.0f} جنيه",
+            f"حوّل الديبوزيت على: {DEPOSIT_WHATSAPP}",
+            f"وابعت screenshot التحويل على الواتساب: {DEPOSIT_WHATSAPP}",
+            "تقدر تتابع معانا من هناك.",
+        ]
         if deposit_note:
             lines.append(f"ملاحظة: {deposit_note}")
-        return "\n".join(lines)  
 
-    lines.extend(["", "أنفذ الأوردر؟"])
+    lines += ["", "أنفذ الأوردر؟"]
     return "\n".join(lines)
-
 
 async def _execute_confirmed_order(
     conversation, history_messages: list, context_data: dict | None
@@ -538,28 +604,40 @@ async def _execute_confirmed_order(
 
     product_id = str(context_data["product_id"])
     governorate_names = await _fetch_governorate_names()
-    name, phone, governorate, address = _parse_customer_details(details_text)
+    name, phone, governorate, address = _parse_customer_details(details_text, governorate_names, history_messages)
 
-    shipping_str = await get_shipping_options.ainvoke(
-        {"product_ids": [product_id], "governorate": governorate}
-    )
-    shipping_price, shipping_location = _parse_shipping_price(shipping_str)
+    variants = await _fetch_product_variants(product_id)
+    selected_variant = None
+    if variants:
+        for msg in history_messages:
+            if msg.get("role") == "customer":
+                found = _match_variant_from_text(msg.get("content", ""), variants)
+                if found:
+                    selected_variant = found
+        if not selected_variant:
+            options_text = "\n".join(f"- {v['size_name']}: {v['price']:.0f} جنيه" for v in variants)
+            return f"محتاج تأكيد المقاس الأول:\n{options_text}"
 
-    result = await create_order_from_chat.ainvoke(
-        {
-            "customer_name": name,
-            "customer_phone": phone,
-            "governorate": governorate,
-            "address": address,
-            "product_ids": [product_id],
-            "shipping_total": shipping_price,
-            "shipping_location": shipping_location or governorate,
-            "conversation_id": str(conversation.id),
-        }
-    )
+    shipping_str = await get_shipping_options.ainvoke({"product_ids": [product_id], "governorate": governorate})
+    shipping_options = _parse_shipping_options(shipping_str)
+    shipping_price, shipping_location = 0.0, ""
+    if shipping_options:
+        matched = _match_shipping_option_from_address(address, shipping_options) or shipping_options[0]
+        shipping_price, shipping_location = matched["price"], matched["location"]
+
+    result = await create_order_from_chat.ainvoke({
+        "customer_name": name,
+        "customer_phone": phone,
+        "governorate": governorate,
+        "address": address,
+        "product_ids": [product_id],
+        "variant_ids": [str(selected_variant["id"])] if selected_variant else [""],
+        "shipping_total": shipping_price,
+        "shipping_location": shipping_location or governorate,
+        "conversation_id": str(conversation.id),
+    })
 
     return _clean_response(f"تمام يا فندم.\n{result}\n\nهنتواصل معاك قريب.")
-
 
 @database_sync_to_async
 def _fetch_product_details(product_id: str) -> str | None:
@@ -645,7 +723,9 @@ async def get_agent_reply(
         return "الأسعار عندنا ثابتة وما بنعملش تخفيض للأسف، بس المنتج يستاهل. تحب نكمل نجهزلك الأوردر؟"
 
     if _is_search_intent(customer_message):
-        return _clean_response(await _handle_product_search(customer_message))
+        search_reply = await _handle_product_search(customer_message)
+        if search_reply is not None:
+            return _clean_response(search_reply)
 
     if _customer_confirmed_order(customer_message, history_messages):
         return await _execute_confirmed_order(conversation, history_messages, context_data)
@@ -665,7 +745,7 @@ async def get_agent_reply(
         and context_data
         and context_data.get("product_id")
     ):
-        return await _build_order_quote(customer_message, context_data, product_details)
+        return await _build_order_quote(customer_message, context_data, product_details, history_messages)
 
     if _should_collect_order_details(customer_message, history_messages):
         return _build_order_start_reply(context_data, product_details)
