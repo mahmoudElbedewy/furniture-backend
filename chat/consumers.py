@@ -8,7 +8,6 @@ from agent.customer_agent import get_agent_reply
 from accounts.identity import verify_identity_token
 
 
-
 class ChatConsumer(AsyncWebsocketConsumer):
     async def connect(self):
         self.conversation_id = self.scope["url_route"]["kwargs"]["conversation_id"]
@@ -31,11 +30,17 @@ class ChatConsumer(AsyncWebsocketConsumer):
 
         if not message:
             return
-        
+
         if sender_type == "customer":
             authorized = await self.is_authorized_customer(identity_token)
             if not authorized:
-                return 
+                return
+        elif sender_type == "admin":
+            is_admin = await self.is_authorized_admin()
+            if not is_admin:
+                return
+        else:
+            return
 
         saved_msg = await self.save_message(
             self.conversation_id, sender_type, message
@@ -71,6 +76,15 @@ class ChatConsumer(AsyncWebsocketConsumer):
 
         identifier = verify_identity_token(identity_token)
         return bool(identifier) and conversation.customer_identifier == identifier
+
+    @database_sync_to_async
+    def is_authorized_admin(self):
+        user = self.scope.get("user")
+        return bool(
+            user
+            and getattr(user, "is_authenticated", False)
+            and getattr(user, "role", None) == "admin"
+        )
 
     async def process_agent_reply(self, customer_message, context_data=None):
         agent_status = await self.get_agent_status()

@@ -164,3 +164,4 @@ zope.interface==8.4
 zstandard==0.25.0
 whitenoise==6.8.2
 google-analytics-data>=0.18.0
+locust

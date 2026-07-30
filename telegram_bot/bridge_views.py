@@ -10,8 +10,10 @@ import hmac
 
 
 def _check_secret(request):
-    provided = request.headers.get("X-Bridge-Secret", "")
     expected = settings.TELEGRAM_BRIDGE_SECRET or ""
+    if not expected:
+        return False
+    provided = request.headers.get("X-Bridge-Secret", "")
     return hmac.compare_digest(provided, expected)
 
 @require_http_methods(["GET"])
