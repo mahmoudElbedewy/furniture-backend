@@ -220,8 +220,3 @@ if not DEBUG:
     SECURE_PROXY_SSL_HEADER = ("HTTP_X_FORWARDED_PROTO", "https")
 
 
-"DEFAULT_THROTTLE_RATES": {
-    "anon": config("THROTTLE_ANON_RATE", default="30/minute"),
-    "user": config("THROTTLE_USER_RATE", default="60/minute"),
-    "order-track": config("THROTTLE_ORDER_TRACK_RATE", default="10/minute"),
-}
