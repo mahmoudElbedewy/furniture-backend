@@ -8,6 +8,16 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Trigger sync
+        env:
+          HF_SPACE_URL_SECRET: ${{ secrets.HF_SPACE_URL }}
+          BRIDGE_SECRET: ${{ secrets.TELEGRAM_BRIDGE_SECRET }}
         run: |
-          curl -X POST "${{ secrets.HF_SPACE_URL }}/api/analytics/bridge/sync/" \
-            -H "X-Bridge-Secret: ${{ secrets.TELEGRAM_BRIDGE_SECRET }}"
+          if [ -z "$BRIDGE_SECRET" ]; then
+            echo "TELEGRAM_BRIDGE_SECRET is not configured"
+            exit 1
+          fi
+
+          HF_SPACE_URL="${HF_SPACE_URL_SECRET:-https://mahmoudelbedewy-fureniture.hf.space}"
+
+          curl --fail --show-error --silent -X POST "${HF_SPACE_URL%/}/api/analytics/bridge/sync/" \
+            -H "X-Bridge-Secret: $BRIDGE_SECRET"
