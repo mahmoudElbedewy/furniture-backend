@@ -1,5 +1,5 @@
 from django.contrib import admin
-from .models import Order, OrderItem, OrderStatusLog, Commission, AbandonedCart
+from .models import Order, OrderItem, OrderStatusLog, Commission, StorePayment, AbandonedCart
 
 
 class OrderItemInline(admin.TabularInline):
@@ -47,6 +47,13 @@ class CommissionAdmin(admin.ModelAdmin):
     list_filter = ('is_settled',)
     search_fields = ('order__order_number',)
     autocomplete_fields = ('order',)
+
+
+@admin.register(StorePayment)
+class StorePaymentAdmin(admin.ModelAdmin):
+    list_display = ('description', 'payment_type', 'amount', 'paid_at', 'created_at')
+    list_filter = ('payment_type', 'paid_at')
+    search_fields = ('description',)
 
 
 @admin.register(AbandonedCart)

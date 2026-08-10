@@ -1,0 +1,73 @@
+:root {
+  --primary: #164e63;
+  --secondary: #0f766e;
+  --accent: #f59e0b;
+  --primary-fg: #ffffff;
+  --body-fg: #172033;
+  --body-bg: #f6f8fb;
+  --body-quiet-color: #526173;
+  --body-loud-color: #0f172a;
+  --header-color: #ffffff;
+  --header-branding-color: #ffffff;
+  --header-bg: #143449;
+  --header-link-color: #d8f3f0;
+  --breadcrumbs-bg: #0f766e;
+  --breadcrumbs-fg: #ffffff;
+  --link-fg: #0f766e;
+  --link-hover-color: #0b5c56;
+  --link-selected-fg: #164e63;
+  --hairline-color: #d7dee8;
+  --border-color: #c9d3df;
+  --error-fg: #b91c1c;
+  --message-success-bg: #d9f99d;
+  --message-warning-bg: #fef3c7;
+  --message-error-bg: #fee2e2;
+  --darkened-bg: #edf2f7;
+  --selected-bg: #dff7f3;
+  --selected-row: #fff7db;
+}
+
+html[dir="rtl"],
+body {
+  direction: rtl;
+  text-align: right;
+}
+
+body,
+button,
+input,
+select,
+textarea {
+  font-family: Tahoma, Arial, sans-serif;
+}
+
+#header {
+  box-shadow: 0 1px 4px rgba(15, 23, 42, 0.16);
+}
+
+.module,
+.inline-group,
+div.breadcrumbs,
+#content-related {
+  border-radius: 6px;
+}
+
+table thead th {
+  background: #e7f3f1;
+  color: #102a43;
+}
+
+input,
+select,
+textarea,
+.vTextField {
+  border-color: #aebccb;
+  color: #0f172a;
+}
+
+input:focus,
+select:focus,
+textarea:focus {
+  border-color: #0f766e;
+  box-shadow: 0 0 0 2px rgba(15, 118, 110, 0.18);
+}

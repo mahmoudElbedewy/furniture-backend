@@ -1,15 +1,17 @@
 from rest_framework import viewsets, views
 from rest_framework.response import Response
 from rest_framework import status
-from rest_framework.parsers import MultiPartParser, FormParser
-from django.db.models import Sum, Count
+from rest_framework.parsers import MultiPartParser, FormParser, JSONParser
+from django.db import models
+from django.db.models import Sum, Count, Q
 from django.shortcuts import get_object_or_404
 from django.core.files.storage import default_storage
 from django.utils.text import slugify
+from channels.layers import get_channel_layer
 from accounts.permissions import IsAdminRole
-from orders.models import Order, Commission
+from orders.models import Order, Commission, StorePayment
 from catalog.models import Product
-from chat.models import ChatConversation, ChatMessage
+from chat.models import ChatAttachment, ChatConversation, ChatMessage
 from agent.models import AgentSettings, AgentActionRequest
 from agent.admin_agent import get_admin_reply
 from agent.extractor import REQUIRED_FIELDS, extract_product_data
@@ -23,6 +25,31 @@ from django.utils import timezone
 from asgiref.sync import async_to_sync
 import json
 import uuid
+
+
+def with_admin_unread_counts(queryset):
+    return queryset.annotate(
+        customer_unread_count=Count(
+            'messages',
+            filter=(
+                Q(messages__sender_type__in=['admin', 'agent'])
+                & (
+                    Q(customer_last_read_at__isnull=True)
+                    | Q(messages__timestamp__gt=models.F('customer_last_read_at'))
+                )
+            ),
+        ),
+        admin_unread_count=Count(
+            'messages',
+            filter=(
+                Q(messages__sender_type='customer')
+                & (
+                    Q(admin_last_read_at__isnull=True)
+                    | Q(messages__timestamp__gt=models.F('admin_last_read_at'))
+                )
+            ),
+        ),
+    )
 
 # --- Serializers for Admin ---
 class AgentSettingsSerializer(serializers.ModelSerializer):
@@ -38,6 +65,11 @@ class AgentActionRequestSerializer(serializers.ModelSerializer):
 class CommissionSerializer(serializers.ModelSerializer):
     class Meta:
         model = Commission
+        fields = '__all__'
+
+class StorePaymentSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = StorePayment
         fields = '__all__'
 
 class AdminNotificationSerializer(serializers.ModelSerializer):
@@ -68,14 +100,28 @@ class DashboardStatsView(views.APIView):
     def get(self, request):
         total_orders = Order.objects.count()
         total_revenue = Order.objects.aggregate(total=Sum('total_price'))['total'] or 0
-        total_commissions = Commission.objects.filter(is_settled=False).aggregate(total=Sum('amount'))['total'] or 0
+        total_commissions = Commission.objects.aggregate(total=Sum('amount'))['total'] or 0
+        received_commissions = Commission.objects.filter(is_settled=True).aggregate(total=Sum('amount'))['total'] or 0
+        pending_commissions = Commission.objects.filter(is_settled=False).aggregate(total=Sum('amount'))['total'] or 0
+        total_payments = StorePayment.objects.aggregate(total=Sum('amount'))['total'] or 0
+        net_profit = received_commissions - total_payments
         total_products = Product.objects.filter(is_available=True).count()
+        chat_stats = ChatConversation.objects.aggregate(
+            total=Count('id'),
+            needs_admin=Count('id', filter=Q(status='needs_admin')),
+            open=Count('id', filter=Q(status='open')),
+        )
         
         return Response({
             "total_orders": total_orders,
             "total_revenue": total_revenue,
-            "pending_commissions": total_commissions,
-            "active_products": total_products
+            "total_commissions": total_commissions,
+            "received_commissions": received_commissions,
+            "pending_commissions": pending_commissions,
+            "our_payments": total_payments,
+            "net_profit": net_profit,
+            "active_products": total_products,
+            "chat_stats": chat_stats,
         })
 
 class ChatAdminViewSet(viewsets.ModelViewSet):
@@ -84,11 +130,18 @@ class ChatAdminViewSet(viewsets.ModelViewSet):
     serializer_class = ChatConversationSerializer
 
     def get_queryset(self):
-        qs = super().get_queryset()
+        qs = with_admin_unread_counts(super().get_queryset())
         status_param = self.request.query_params.get('status')
         if status_param:
             qs = qs.filter(status=status_param)
         return qs
+
+    @action(detail=True, methods=['patch'])
+    def mark_read(self, request, pk=None):
+        conversation = self.get_object()
+        conversation.admin_last_read_at = timezone.now()
+        conversation.save(update_fields=['admin_last_read_at', 'last_message_at'])
+        return Response(ChatConversationSerializer(conversation).data)
 
     @action(detail=True, methods=['patch'])
     def activate_agent(self, request, pk=None):
@@ -108,24 +161,50 @@ class ChatAdminViewSet(viewsets.ModelViewSet):
 
 class ChatAdminReplyView(views.APIView):
     permission_classes = [IsAdminRole]
+    parser_classes = [MultiPartParser, FormParser, JSONParser]
 
     def post(self, request, pk):
         conversation = get_object_or_404(ChatConversation, pk=pk)
-        content = request.data.get('content')
-        if not content:
-            return Response({"error": "content required"}, status=status.HTTP_400_BAD_REQUEST)
+        content = (request.data.get('content') or request.data.get('message') or '').strip()
+        images = request.FILES.getlist('images')
+        if not content and not images:
+            return Response({"error": "content or images required"}, status=status.HTTP_400_BAD_REQUEST)
         
         msg = ChatMessage.objects.create(
             conversation=conversation,
             sender_type='admin',
             content=content
         )
+        for image_file in images:
+            ChatAttachment.objects.create(message=msg, image=image_file)
         # Update conversation status if it was needs_admin
         if conversation.status == 'needs_admin':
             conversation.status = 'open'
             conversation.save()
+
+        from chat.notifications import send_customer_message_notification
+
+        send_customer_message_notification(
+            conversation.customer_identifier,
+            content or 'صورة جديدة من خدمة العملاء',
+        )
             
-        return Response(ChatMessageSerializer(msg).data)
+        data = ChatMessageSerializer(msg, context={"request": request}).data
+        channel_layer = get_channel_layer()
+        if channel_layer:
+            async_to_sync(channel_layer.group_send)(
+                f"chat_{conversation.id}",
+                {
+                    "type": "chat_message",
+                    "id": data["id"],
+                    "message": data["content"],
+                    "sender_type": data["sender_type"],
+                    "timestamp": data["timestamp"],
+                    "attachments": data["attachments"],
+                },
+            )
+
+        return Response(data)
 
 class AgentSettingsView(views.APIView):
     permission_classes = [IsAdminRole]
@@ -323,3 +402,9 @@ class CommissionViewSet(viewsets.ModelViewSet):
             "settled_commissions": settled,
             "unsettled_commissions": unsettled
         })
+
+
+class StorePaymentViewSet(viewsets.ModelViewSet):
+    permission_classes = [IsAdminRole]
+    queryset = StorePayment.objects.all()
+    serializer_class = StorePaymentSerializer

@@ -51,8 +51,10 @@ class ChatConsumer(AsyncWebsocketConsumer):
             {
                 "type": "chat_message",
                 "message": saved_msg["content"],
+                "id": saved_msg["id"],
                 "sender_type": saved_msg["sender_type"],
                 "timestamp": saved_msg["timestamp"],
+                "attachments": saved_msg["attachments"],
             },
         )
 
@@ -109,8 +111,10 @@ class ChatConsumer(AsyncWebsocketConsumer):
                 {
                     "type": "chat_message",
                     "message": saved_reply["content"],
+                    "id": saved_reply["id"],
                     "sender_type": saved_reply["sender_type"],
                     "timestamp": saved_reply["timestamp"],
+                    "attachments": saved_reply["attachments"],
                 },
             )
 
@@ -119,8 +123,10 @@ class ChatConsumer(AsyncWebsocketConsumer):
             text_data=json.dumps(
                 {
                     "message": event["message"],
+                    "id": event.get("id"),
                     "sender_type": event["sender_type"],
                     "timestamp": event["timestamp"],
+                    "attachments": event.get("attachments", []),
                 }
             )
         )
@@ -145,10 +151,17 @@ class ChatConsumer(AsyncWebsocketConsumer):
                 message=f"{conversation.customer_name}: {content}",
             )
 
+        if sender_type in ("admin", "agent"):
+            from .notifications import send_customer_message_notification
+
+            send_customer_message_notification(conversation.customer_identifier, content)
+
         return {
+            "id": msg.id,
             "content": msg.content,
             "sender_type": msg.sender_type,
             "timestamp": msg.timestamp.isoformat(),
+            "attachments": [],
         }
 
     @database_sync_to_async

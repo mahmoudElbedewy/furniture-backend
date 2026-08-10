@@ -14,6 +14,7 @@ router.register(r'orders', AdminOrderViewSet, basename='admin-order')
 router.register(r'chats', admin_views.ChatAdminViewSet, basename='admin-chat')
 router.register(r'agent-actions', admin_views.AgentActionRequestViewSet, basename='admin-agent-action')
 router.register(r'commissions', admin_views.CommissionViewSet, basename='admin-commission')
+router.register(r'payments', admin_views.StorePaymentViewSet, basename='admin-payment')
 router.register(r'suppliers', admin_views.AdminSupplierViewSet, basename='admin-supplier')
 router.register(r'notifications', admin_views.AdminNotificationViewSet, basename='admin-notification')
 

@@ -1,6 +1,7 @@
 import uuid
 from django.db import models
 from django.conf import settings
+from django.utils import timezone
 from catalog.models import Product
 
 
@@ -105,6 +106,30 @@ class Commission(models.Model):
 
     def __str__(self):
         return f"{self.order.order_number} - {self.amount} ({'تمت التسوية' if self.is_settled else 'معلقة'})"
+
+
+class StorePayment(models.Model):
+    PAYMENT_TYPE_CHOICES = (
+        ("ads", "Ads"),
+        ("shipping", "Shipping"),
+        ("tools", "Tools"),
+        ("other", "Other"),
+    )
+
+    amount = models.DecimalField(max_digits=10, decimal_places=2)
+    payment_type = models.CharField(
+        max_length=30, choices=PAYMENT_TYPE_CHOICES, default="ads"
+    )
+    description = models.CharField(max_length=255, blank=True, default="")
+    paid_at = models.DateTimeField(default=timezone.now)
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        ordering = ["-paid_at", "-created_at"]
+
+    def __str__(self):
+        label = self.description or self.get_payment_type_display()
+        return f"{label} - {self.amount}"
 
 
 class AbandonedCart(models.Model):
