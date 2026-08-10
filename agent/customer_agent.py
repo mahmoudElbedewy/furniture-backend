@@ -21,6 +21,7 @@ from .tools import (
 )
 from django.core.cache import cache
 from catalog.models import Product, Governorate, Category
+from .arabic_utils import find_category_match
 
 TOOLS = [
     search_products,
@@ -85,6 +86,29 @@ TRACK_ORDER_PATTERNS = [r"تتبع", r"تراك", r"فين\s+الا?وردر", r
 
 CONFIRM_WORDS = ["تمام", "موافق", "أيوه", "ايوه", "نعم", "انفذ", "نفذ", "ماشي", "اوك", "ok", "yes", "اكيد", "أكيد"]
 
+CLARIFY_CATEGORY_MSG = (
+    "تمام يا فندم، قولي نوع المنتج اللي بتدور عليه (دولاب، كنبة، سرير، ترابيزة...) "
+    "أو اكتب \"أي حاجة\" لو عايز تشوف كل المتاح."
+)
+
+_GENERIC_ANY_REPLIES = {
+    "اي", "أي", "اى", "اي نوع", "اي حاجه", "اي منتج", "اي منتجات",
+    "كله", "الكل", "مش مهم", "عادي", "كل حاجه", "زي ما هو",
+}
+
+
+def _looks_like_generic_any_reply(text: str) -> bool:
+    norm = _normalize_arabic(text).strip().rstrip(".!،؟")
+    return norm in _GENERIC_ANY_REPLIES
+
+
+def _agent_last_message_is_category_clarify(history_messages: list) -> bool:
+    for msg in reversed(history_messages):
+        if msg.get("role") == "agent":
+            return msg.get("content", "").strip() == CLARIFY_CATEGORY_MSG
+        if msg.get("role") == "customer":
+            return False
+    return False
 
 PHONE_PATTERN = re.compile(r"01[0125][0-9]{8}")
 @database_sync_to_async
@@ -212,27 +236,14 @@ def _is_search_intent(text: str) -> bool:
         return False
     blob = _text_blob(text)
     search_signals = [
-        "دواليب",
-        "دولاب",
-        "ترابيز",
-        "كنب",
-        "سرير",
-        "بانكيت",
-        "بلاط",
-        "مطبخ",
-        "سعر",
-        "تحت",
-        "فوق",
-        "اقل",
-        "أقل",
-        "اكثر",
-        "أكثر",
-        "خامة",
-        "لون",
-        "مقترح",
-        "دور",
-        "فيه",
-        "موجود",
+        "دواليب", "دولاب", "خزانة", "خزائن",
+        "ترابيزات", "ترابيزة", "طاولة", "طاولات",
+        "كنب", "كنبة", "انتريه", "أنتريه",
+        "سرير", "سراير",
+        "بانكيت", "بلاط", "مطبخ",
+        "مكتب", "مكاتب", "كرسي", "كراسي", "بوفيه",
+        "سعر", "تحت", "فوق", "اقل", "أقل", "اكثر", "أكثر",
+        "خامة", "لون", "مقترح", "دور", "فيه", "موجود",
     ]
     return any(s in blob for s in search_signals)
 
@@ -342,15 +353,12 @@ STOP_WORDS = {
     "ال", "او", "أو", "و", "يا", "لو", "سمحت", "ممكن",
 }
 
-async def _parse_search_params(text: str) -> dict:
+def _parse_single_message_search_params(text: str, category_keywords: dict) -> dict:
+    """يستخرج فلاتر البحث من رسالة واحدة بس (من غير أي استعلام داتابيز إضافي)."""
     blob = _text_blob(text)
     params = {"query": "", "category": None, "max_price": None, "min_price": None}
 
-    category_keywords = await _fetch_category_keywords()
-    for norm_keyword, category in category_keywords.items():
-        if norm_keyword in blob:
-            params["category"] = category
-            break
+    params["category"] = find_category_match(text, category_keywords)
 
     max_match = re.search(r"(?:تحت|اقل\s+من|أقل\s+من|اقل|أقل|less\s+than|below)\s*(\d+)", blob)
     if max_match:
@@ -363,8 +371,43 @@ async def _parse_search_params(text: str) -> dict:
     keywords = [w for w in words if _normalize_arabic(w) not in STOP_WORDS and len(w) > 1]
     params["query"] = "" if params["category"] else " ".join(keywords)[:50]
 
-    return {k: v for k, v in params.items() if v is not None}
+    return params
 
+
+def _gather_conversation_search_slots(
+    history_messages: list, current_message: str, category_keywords: dict
+) -> dict:
+    """لو العميل حدد السعر في رسالة والتصنيف في رسالة تانية، الدالة دي بتلمّهم
+    مع بعض بدل ما كل رسالة تتفسر لوحدها وتنسى اللي قبلها."""
+    related_texts = []
+    for msg in reversed(history_messages):
+        if msg.get("role") != "customer":
+            continue
+        content = msg.get("content", "") or ""
+        if not _is_search_intent(content) and not _looks_like_generic_any_reply(content):
+            break
+        related_texts.append(content)
+        if len(related_texts) >= 4:
+            break
+    related_texts.reverse()
+    related_texts.append(current_message)
+
+    merged = {"query": "", "category": None, "max_price": None, "min_price": None}
+    for text in related_texts:
+        parsed = _parse_single_message_search_params(text, category_keywords)
+        for key in ("category", "max_price", "min_price"):
+            if parsed.get(key) is not None:
+                merged[key] = parsed[key]
+        if parsed.get("query"):
+            merged["query"] = parsed["query"]
+
+    return merged
+
+
+async def _parse_search_params(history_messages: list, current_message: str) -> dict:
+    category_keywords = await _fetch_category_keywords()
+    merged = _gather_conversation_search_slots(history_messages, current_message, category_keywords)
+    return {k: v for k, v in merged.items() if v is not None}
 
 @database_sync_to_async
 def _fetch_product_variants(product_id: str) -> list[dict]:
@@ -471,8 +514,7 @@ def _build_order_start_reply(
     return "\n".join(lines)
 
 
-async def _handle_product_search(customer_message: str) -> str | None:
-    params = await _parse_search_params(customer_message)
+async def _run_catalog_search(params: dict) -> list:
     search_args = {"query": params.get("query", "")}
     if params.get("category"):
         search_args["category"] = params["category"]
@@ -483,20 +525,18 @@ async def _handle_product_search(customer_message: str) -> str | None:
 
     results_str = await search_products.ainvoke(search_args)
     if results_str == "لا توجد منتجات مطابقة.":
-        return None  # سيب الموديل يجرب بالأدوات بدل ما نوقف هنا
-
+        return []
     try:
-        results = ast.literal_eval(results_str)
+        return ast.literal_eval(results_str)
     except (SyntaxError, ValueError):
-        return None
+        return []
 
-    if not results:
-        return None
 
-    product_ids = [str(r["id"]) for r in results]
+async def _format_search_results(results: list, prefix: str | None = None) -> str:
+    product_ids = [str(r["id"]) for r in results[:6]]
     cards_str = await show_product_cards.ainvoke({"product_ids": product_ids})
 
-    lines = [f"لقيت {len(results)} منتج مناسب:"]
+    lines = [prefix] if prefix else [f"لقيت {len(results)} منتج مناسب:"]
     for item in results[:6]:
         lines.append(f"- {item['title']} — {item['final_price']} جنيه")
     lines.append("")
@@ -505,6 +545,44 @@ async def _handle_product_search(customer_message: str) -> str | None:
         "أو قولي عايز تعمل أوردر على أنهي واحد."
     )
     return "\n".join(lines) + "\n\n" + cards_str
+
+
+async def _handle_product_search(customer_message: str, history_messages: list) -> str | None:
+    params = await _parse_search_params(history_messages, customer_message)
+
+    has_any_filter = (
+        params.get("category")
+        or params.get("query")
+        or params.get("max_price") is not None
+        or params.get("min_price") is not None
+    )
+    if not has_any_filter:
+        return CLARIFY_CATEGORY_MSG
+
+    results = await _run_catalog_search(params)
+    if results:
+        return await _format_search_results(results)
+
+    if params.get("max_price") is not None:
+        broader = dict(params)
+        broader.pop("max_price")
+        alt_results = await _run_catalog_search(broader)
+        if alt_results:
+            alt_results = sorted(alt_results, key=lambda r: r["final_price"])
+            category_label = params.get("category") or "منتجات"
+            prefix = (
+                f"للأسف مفيش {category_label} سعرها أقل من {int(params['max_price'])} جنيه دلوقتي، "
+                "بس دي أقرب الأسعار المتاحة:"
+            )
+            return await _format_search_results(alt_results, prefix=prefix)
+
+    if params.get("category"):
+        alt_results = await _run_catalog_search({"query": ""})
+        if alt_results:
+            prefix = f"للأسف مفيش {params['category']} متاح دلوقتي، بس ممكن يعجبك حاجة من دول:"
+            return await _format_search_results(alt_results, prefix=prefix)
+
+    return "للأسف مفيش منتجات متاحة تطابق طلبك دلوقتي. حابب أساعدك بحاجة تانية؟"
 
 async def _build_order_quote(
     customer_message: str, context_data: dict, product_details: str | None, history_messages: list
@@ -722,8 +800,11 @@ async def get_agent_reply(
             )
         return "الأسعار عندنا ثابتة وما بنعملش تخفيض للأسف، بس المنتج يستاهل. تحب نكمل نجهزلك الأوردر؟"
 
-    if _is_search_intent(customer_message):
-        search_reply = await _handle_product_search(customer_message)
+    if _is_search_intent(customer_message) or (
+        _agent_last_message_is_category_clarify(history_messages)
+        and _looks_like_generic_any_reply(customer_message)
+    ):
+        search_reply = await _handle_product_search(customer_message, history_messages)
         if search_reply is not None:
             return _clean_response(search_reply)
 

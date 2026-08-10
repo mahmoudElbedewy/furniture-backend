@@ -6,6 +6,8 @@ from chat.models import ChatConversation
 from orders.models import Order, OrderItem
 from django.db import transaction
 from orders.models import Order, OrderItem, Commission
+from django.db.models import Q
+from .arabic_utils import keyword_variants
 
 
 def _build_order_telegram_message(order) -> tuple[str, list]:
@@ -102,9 +104,17 @@ async def search_products(
     def _search():
         qs = Product.objects.filter(is_available=True)
         if query:
-            qs = qs.filter(title__icontains=query) | qs.filter(
-                description__icontains=query
-            )
+            q_filter = Q()
+            for word in query.split():
+                for variant in keyword_variants(word):
+                    q_filter |= (
+                        Q(title__icontains=variant)
+                        | Q(description__icontains=variant)
+                        | Q(material__icontains=variant)
+                        | Q(color__icontains=variant)
+                    )
+            if q_filter:
+                qs = qs.filter(q_filter)
         if category:
             qs = qs.filter(category__name__icontains=category)
         if min_price:
@@ -118,18 +128,10 @@ async def search_products(
         if has_deposit is not None:
             qs = qs.filter(requires_deposit=has_deposit)
         return list(
-            qs[:10].values(
-                "id",
-                "title",
-                "slug",
-                "final_price",
-                "material",
-                "color",
-                "requires_deposit",
-                "deposit_amount",
-                "deposit_note",
-                "ships_nationwide",
-                "default_shipping_price",
+            qs.distinct()[:10].values(
+                "id", "title", "slug", "final_price", "material", "color",
+                "requires_deposit", "deposit_amount", "deposit_note",
+                "ships_nationwide", "default_shipping_price",
             )
         )
 
