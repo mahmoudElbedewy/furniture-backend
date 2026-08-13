@@ -27,6 +27,7 @@ import json
 from django.conf import settings
 import requests
 from accounts.identity import issue_identity_token, verify_identity_token, resolve_identifier_for_request
+from .browsing_context import update_conversation_browsing_context
 
 
 def with_unread_counts(queryset):
@@ -88,6 +89,15 @@ def resolve_customer_name(request, data=None):
     return payload.get("customer_name") or "زائر"
 
 
+def parse_context_data(raw_context):
+    if isinstance(raw_context, str):
+        try:
+            return json.loads(raw_context)
+        except json.JSONDecodeError:
+            return None
+    return raw_context if isinstance(raw_context, dict) else None
+
+
 class ChatStartView(APIView):
     permission_classes = [permissions.AllowAny]
 
@@ -110,6 +120,8 @@ class ChatStartView(APIView):
         if not created and customer_name and conversation.customer_name != customer_name:
             conversation.customer_name = customer_name
             conversation.save(update_fields=["customer_name", "last_message_at"])
+
+        update_conversation_browsing_context(conversation, request.data.get("context"))
 
         data = ChatConversationSerializer(
             attach_unread_counts(conversation), context={"request": request}
@@ -181,12 +193,8 @@ class ChatSendMessageView(APIView):
 
         content = (request.data.get("message") or request.data.get("content") or "").strip()
         sender_type = request.data.get("sender_type", "customer")
-        context_data = request.data.get("context")
-        if isinstance(context_data, str):
-            try:
-                context_data = json.loads(context_data)
-            except json.JSONDecodeError:
-                context_data = None
+        context_data = parse_context_data(request.data.get("context"))
+        update_conversation_browsing_context(conversation, context_data)
         images = request.FILES.getlist("images")
 
         if not content and not images:
@@ -258,6 +266,40 @@ class ChatSendMessageView(APIView):
                 ).data
             },
             status=status.HTTP_201_CREATED,
+        )
+
+
+class ChatBrowsingContextView(APIView):
+    permission_classes = [permissions.AllowAny]
+    parser_classes = [JSONParser]
+
+    def post(self, request, conversation_id):
+        conversation = get_object_or_404(ChatConversation, id=conversation_id)
+        user_identifier = resolve_customer_identifier(request)
+        if not user_identifier:
+            return Response(
+                {"error": "customer_identifier is required"},
+                status=status.HTTP_403_FORBIDDEN,
+            )
+        if conversation.customer_identifier != user_identifier:
+            return Response(
+                {"error": "Unauthorized access to conversation"},
+                status=status.HTTP_403_FORBIDDEN,
+            )
+
+        updated = update_conversation_browsing_context(
+            conversation, parse_context_data(request.data.get("context"))
+        )
+        if not updated:
+            return Response(
+                {"error": "A valid context.current_page is required"},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        return Response(
+            {
+                "last_page_context": conversation.last_page_context,
+                "context_updated_at": conversation.context_updated_at,
+            }
         )
 
 

@@ -6,6 +6,7 @@ from .models import ChatConversation, ChatMessage
 from agent.models import AgentSettings
 from agent.customer_agent import get_agent_reply
 from accounts.identity import verify_identity_token
+from .browsing_context import update_conversation_browsing_context
 
 
 class ChatConsumer(AsyncWebsocketConsumer):
@@ -45,6 +46,8 @@ class ChatConsumer(AsyncWebsocketConsumer):
         saved_msg = await self.save_message(
             self.conversation_id, sender_type, message
         )
+        if sender_type == "customer":
+            await self.save_browsing_context(context_data)
 
         await self.channel_layer.group_send(
             self.room_group_name,
@@ -174,6 +177,11 @@ class ChatConsumer(AsyncWebsocketConsumer):
             "mode": settings.auto_reply_mode,
             "needs_admin": conversation.status == "needs_admin",
         }
+
+    @database_sync_to_async
+    def save_browsing_context(self, context_data):
+        conversation = ChatConversation.objects.get(id=self.conversation_id)
+        update_conversation_browsing_context(conversation, context_data)
 
     @database_sync_to_async
     def get_conversation_history(self):

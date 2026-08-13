@@ -17,6 +17,9 @@ class ChatConversation(models.Model):
     escalation_note = models.TextField(blank=True, default='')
     customer_last_read_at = models.DateTimeField(blank=True, null=True)
     admin_last_read_at = models.DateTimeField(blank=True, null=True)
+    last_page_context = models.JSONField(default=dict, blank=True)
+    page_history = models.JSONField(default=list, blank=True)
+    context_updated_at = models.DateTimeField(blank=True, null=True)
 
     created_at = models.DateTimeField(auto_now_add=True)
     last_message_at = models.DateTimeField(auto_now=True)

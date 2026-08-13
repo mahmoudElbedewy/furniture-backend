@@ -16,7 +16,7 @@ import uuid
 
 from django.http import JsonResponse
 from django.core.exceptions import ValidationError
-from django.db.models import F, Prefetch
+from django.db.models import Case, F, IntegerField, Prefetch, Value, When
 from .models import (
     Category,
     Product,
@@ -25,6 +25,26 @@ from .models import (
     SearchQuery,
     ProductShippingRate,
 )
+
+
+CATEGORY_SLUG_PRIORITY = (
+    "بانكيت",
+    "دولاب",
+    "ترابيزات-انتريه",
+    "ترابيزات-الشاشة",
+    "مكتبات",
+)
+
+
+def category_priority_expression(field_name):
+    return Case(
+        *[
+            When(**{field_name: slug}, then=Value(priority))
+            for priority, slug in enumerate(CATEGORY_SLUG_PRIORITY)
+        ],
+        default=Value(len(CATEGORY_SLUG_PRIORITY)),
+        output_field=IntegerField(),
+    )
 
 
 def product_cards_api(request):
@@ -68,14 +88,18 @@ def product_cards_api(request):
 
 
 class StandardResultsSetPagination(PageNumberPagination):
-    page_size = 12
+    page_size = 16
     page_size_query_param = "page_size"
 
 
 class CategoryListView(generics.ListAPIView):
-    queryset = Category.objects.all()
     serializer_class = CategorySerializer
     permission_classes = [permissions.AllowAny]
+
+    def get_queryset(self):
+        return Category.objects.annotate(
+            display_priority=category_priority_expression("slug")
+        ).order_by("display_priority", "name")
 
 
 class ProductListView(generics.ListAPIView):
@@ -193,7 +217,9 @@ class ProductListView(generics.ListAPIView):
         ):
             qs = qs.order_by(ordering)
         else:
-            qs = qs.order_by("-created_at")
+            qs = qs.annotate(
+                category_priority=category_priority_expression("category__slug")
+            ).order_by("category_priority", "-created_at")
 
         return qs
 
