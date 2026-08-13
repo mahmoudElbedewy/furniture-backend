@@ -257,6 +257,12 @@ class ProductDetailView(generics.RetrieveAPIView):
         return Response(serializer.data)
 
 
+class ProductByIdDetailView(ProductDetailView):
+    """Serve a product through its stable identifier for shared links."""
+
+    lookup_field = "pk"
+
+
 
 
 

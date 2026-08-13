@@ -1,6 +1,13 @@
-from django.test import SimpleTestCase
+import uuid
 
-from .views import CATEGORY_SLUG_PRIORITY, StandardResultsSetPagination
+from django.test import SimpleTestCase
+from django.urls import reverse
+
+from .views import (
+    CATEGORY_SLUG_PRIORITY,
+    ProductByIdDetailView,
+    StandardResultsSetPagination,
+)
 
 
 class CatalogPaginationTests(SimpleTestCase):
@@ -18,3 +25,14 @@ class CatalogPaginationTests(SimpleTestCase):
                 "مكتبات",
             ),
         )
+
+
+class ProductShareLinkTests(SimpleTestCase):
+    def test_product_can_be_resolved_by_stable_identifier(self):
+        product_id = uuid.uuid4()
+
+        self.assertEqual(
+            reverse("product-detail-by-id", kwargs={"pk": product_id}),
+            f"/api/catalog/products/id/{product_id}/",
+        )
+        self.assertEqual(ProductByIdDetailView.lookup_field, "pk")

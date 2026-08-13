@@ -65,11 +65,14 @@ MIDDLEWARE = [
 ROOT_URLCONF = "core.urls"
 CORS_ALLOWED_ORIGINS = [
     "https://homestyle-store.vercel.app",
+    "https://myhomestyle.store",
+    "https://www.myhomestyle.store",
     "http://localhost:5173",
     "http://127.0.0.1:5173",
 ]
 CORS_ALLOWED_ORIGIN_REGEXES = [
     r"^https://homestyle-store\.vercel\.app$",
+    r"^https://(www\.)?myhomestyle\.store$",
 ]
 
 TEMPLATES = [
@@ -155,6 +158,8 @@ CSRF_TRUSTED_ORIGINS = [
     "http://127.0.0.1:5173",
     "https://mahmoudelbedewy-fureniture.hf.space",
     "https://homestyle-store.vercel.app",
+    "https://myhomestyle.store",
+    "https://www.myhomestyle.store",
 ]
 
 TELEGRAM_BOT_TOKEN = config("TELEGRAM_BOT_TOKEN", default="")
@@ -207,7 +212,7 @@ BACKEND_BASE_URL = config(
     "BACKEND_BASE_URL", default="https://mahmoudelbedewy-fureniture.hf.space"
 ).rstrip("/")
 FRONTEND_BASE_URL = config(
-    "FRONTEND_BASE_URL", default="https://homestyle-store.vercel.app"
+    "FRONTEND_BASE_URL", default="https://myhomestyle.store"
 ).rstrip("/")
 META_OAUTH_SCOPES = config(
     "META_OAUTH_SCOPES", default="pages_show_list,pages_read_engagement"
