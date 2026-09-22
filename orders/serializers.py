@@ -22,6 +22,7 @@ class OrderItemSerializer(serializers.ModelSerializer):
             "product_title",
             "variant_id",
             "variant_size_name",
+            "selected_color",
             "quantity",
             "price_at_order_time",
             "shipping_price",
@@ -32,6 +33,7 @@ class OrderItemSerializer(serializers.ModelSerializer):
     def validate(self, attrs):
         product = attrs.get("product")
         variant = attrs.get("variant")
+        selected_color = (attrs.get("selected_color") or "").strip()
 
         if (
             product
@@ -45,6 +47,12 @@ class OrderItemSerializer(serializers.ModelSerializer):
             raise serializers.ValidationError(
                 {"variant_id": "المقاس المختار لا ينتمي لهذا المنتج."}
             )
+        if product and selected_color and product.color_options:
+            available_colors = {str(color).strip() for color in product.color_options}
+            if selected_color not in available_colors:
+                raise serializers.ValidationError(
+                    {"selected_color": "اللون المختار غير متاح لهذا المنتج."}
+                )
         return attrs
 
 
@@ -61,6 +69,7 @@ class OrderSerializer(serializers.ModelSerializer):
             "customer_name",
             "customer_phone",
             "customer_governorate",
+            "customer_area",
             "customer_address",
             "status",
             "shipping_price",
@@ -192,6 +201,7 @@ class OrderSerializer(serializers.ModelSerializer):
                     product=item_data["product"],
                     variant=variant,
                     variant_size_name=variant.size_name if variant else None,
+                    selected_color=item_data.get("selected_color") or None,
                     quantity=item_data.get("quantity", 1),
                     price_at_order_time=unit_price,
                     shipping_price=item_data.get("_calculated_shipping_price", 0),
@@ -233,10 +243,16 @@ class OrderSerializer(serializers.ModelSerializer):
                     if item.variant_size_name
                     else ""
                 )
+                color_line = (
+                    f"🎨 اللون: {escape(item.selected_color)}\n"
+                    if item.selected_color
+                    else ""
+                )
                 lines.append(
                     f"━━━━━━━━━━━━━━━━━━\n"
                     f"📦 <b>{product.title}</b> x{item.quantity}\n"
                     f"{size_line}"
+                    f"{color_line}"
                     f"📝 الوصف: {description}\n"
                     f"💰 السعر قبل العمولة: {base} ج\n"
                     f"💵 العمولة: {commission} ج\n"

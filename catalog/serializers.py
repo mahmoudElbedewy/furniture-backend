@@ -1,3 +1,4 @@
+from django.conf import settings
 from rest_framework import serializers
 from .models import (
     Category,
@@ -8,6 +9,17 @@ from .models import (
     Favorite,
     ProductVariant,
 )
+
+
+def optimized_cloudinary_url(url, width=800):
+    """Serve responsive Cloudinary derivatives without changing stored originals."""
+    if not url or "/upload/" not in url or "res.cloudinary.com" not in url:
+        return url
+    return url.replace(
+        "/upload/",
+        f"/upload/f_auto,q_auto,w_{width},c_limit/",
+        1,
+    )
 
 
 class CategorySerializer(serializers.ModelSerializer):
@@ -62,11 +74,13 @@ class ProductShippingRateSerializer(serializers.ModelSerializer):
 
 class ProductSerializer(serializers.ModelSerializer):
     category_name = serializers.CharField(source="category.name", read_only=True)
+    category_slug = serializers.CharField(source="category.slug", read_only=True)
     images = serializers.SerializerMethodField()
     reviews = serializers.SerializerMethodField()
     shipping_rates = serializers.SerializerMethodField()
     shipping_summary = serializers.SerializerMethodField()
     variants = serializers.SerializerMethodField()
+    measurement_image = serializers.SerializerMethodField()
 
     class Meta:
         model = Product
@@ -77,10 +91,13 @@ class ProductSerializer(serializers.ModelSerializer):
             "description",
             "material",
             "color",
+            "color_options",
             "dimensions",
+            "measurement_image",
             "final_price",
             "is_available",
             "category_name",
+            "category_slug",
             "requires_deposit",
             "deposit_amount",
             "deposit_note",
@@ -94,8 +111,15 @@ class ProductSerializer(serializers.ModelSerializer):
         )
 
     def get_images(self, obj):
-        imgs = obj.images.all()
+        # The main store view always starts at index 0, so keep the primary
+        # image first even when it was uploaded after the other images.
+        imgs = sorted(obj.images.all(), key=lambda image: not image.is_primary)
         return ProductImageSerializer(imgs, many=True).data
+
+    def get_measurement_image(self, obj):
+        if not obj.measurement_image:
+            return None
+        return obj.measurement_image.url
 
     def get_reviews(self, obj):
         revs = list(obj.reviews.all())[:5]
@@ -107,6 +131,11 @@ class ProductSerializer(serializers.ModelSerializer):
 
     def get_shipping_summary(self, obj):
         rates = obj.shipping_rates.all()
+        estimated_delivery = getattr(
+            settings,
+            "STORE_DELIVERY_ESTIMATE",
+            "خلال أسبوع من تأكيد الطلب",
+        )
         if not rates:
             return {
                 "free_shipping_areas": [],
@@ -122,6 +151,7 @@ class ProductSerializer(serializers.ModelSerializer):
                     if obj.default_shipping_price == 0
                     else "يوجد رسوم شحن"
                 ),
+                "estimated_delivery": estimated_delivery,
             }
 
         free_areas = []
@@ -149,6 +179,7 @@ class ProductSerializer(serializers.ModelSerializer):
                 if obj.default_shipping_price
                 else None
             ),
+            "estimated_delivery": estimated_delivery,
             "message": self._generate_shipping_message(
                 free_areas, paid_shipping_list, obj.default_shipping_price
             ),
@@ -176,6 +207,42 @@ class ProductSerializer(serializers.ModelSerializer):
     def get_variants(self, obj):
         variants = [v for v in obj.variants.all() if v.is_available]
         return ProductVariantSerializer(variants, many=True).data
+
+
+class ProductCardSerializer(serializers.ModelSerializer):
+    """Compact catalog payload; full product data is fetched on the PDP only."""
+
+    category_name = serializers.CharField(source="category.name", read_only=True)
+    category_slug = serializers.CharField(source="category.slug", read_only=True)
+    images = serializers.SerializerMethodField()
+
+    class Meta:
+        model = Product
+        fields = (
+            "id",
+            "title",
+            "slug",
+            "final_price",
+            "is_available",
+            "category_name",
+            "category_slug",
+            "material",
+            "color",
+            "images",
+        )
+
+    def get_images(self, obj):
+        images = list(obj.images.all())
+        image = next((item for item in images if item.is_primary), images[0] if images else None)
+        if not image or not image.image:
+            return []
+        return [
+            {
+                "id": image.id,
+                "image": optimized_cloudinary_url(image.image.url, width=720),
+                "is_primary": True,
+            }
+        ]
 
 
 class FavoriteSerializer(serializers.ModelSerializer):

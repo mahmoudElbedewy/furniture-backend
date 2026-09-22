@@ -1,10 +1,14 @@
 import json
+import logging
 from rest_framework import generics, permissions, status
 from rest_framework.parsers import MultiPartParser, FormParser, JSONParser
 from rest_framework.response import Response
 from django.db.models import Q
 from .models import Order
 from .serializers import OrderSerializer
+
+
+logger = logging.getLogger(__name__)
 
 class OrderCreateView(generics.CreateAPIView):
     queryset = Order.objects.all()
@@ -25,6 +29,14 @@ class OrderCreateView(generics.CreateAPIView):
         serializer = self.get_serializer(data=data)
         serializer.is_valid(raise_exception=True)
         self.perform_create(serializer)
+        # This server-side event is authoritative, unlike a browser event that
+        # can be interrupted when the shopper closes the tab after ordering.
+        try:
+            from core.tracking import record_funnel_event
+
+            record_funnel_event(request, "order_complete", order=serializer.instance)
+        except Exception:
+            logger.exception("Could not record the completed-order funnel event")
         headers = self.get_success_headers(serializer.data)
         return Response(serializer.data, status=status.HTTP_201_CREATED, headers=headers)
 

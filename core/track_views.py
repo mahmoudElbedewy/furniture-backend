@@ -1,10 +1,10 @@
-import hashlib
 from rest_framework import views, status
 from rest_framework.response import Response
 from rest_framework.permissions import AllowAny
 from agent.models import WebPageVisit
 from agent.models import FunnelEvent
 from catalog.models import Product
+from core.tracking import record_funnel_event, visitor_session_key
 
 
 class TrackVisitView(views.APIView):
@@ -27,12 +27,7 @@ class TrackVisitView(views.APIView):
             else:
                 referrer_type = 'referral'
         
-        # مفتاح الجلسة من IP + User-Agent
-        ip = request.META.get('HTTP_X_FORWARDED_FOR', request.META.get('REMOTE_ADDR', ''))
-        if ',' in ip:
-            ip = ip.split(',')[0].strip()
-        ua = request.META.get('HTTP_USER_AGENT', '')
-        session_key = hashlib.md5(f'{ip}:{ua}'.encode()).hexdigest()[:16]
+        session_key = visitor_session_key(request)
         
         WebPageVisit.objects.create(
             path=path[:500],
@@ -46,7 +41,10 @@ class TrackFunnelEventView(views.APIView):
     permission_classes = [AllowAny]
     throttle_classes = []
 
-    VALID_EVENTS = {c[0] for c in FunnelEvent.EVENT_CHOICES}
+    # Completed orders are only recorded by OrderCreateView. Keeping this
+    # event off the public endpoint prevents browser retries or forged calls
+    # from corrupting revenue-conversion reporting.
+    VALID_EVENTS = {c[0] for c in FunnelEvent.EVENT_CHOICES} - {"order_complete"}
 
     def post(self, request):
         event_type = request.data.get('event_type')
@@ -58,15 +56,5 @@ class TrackFunnelEventView(views.APIView):
         if product_id:
             product = Product.objects.filter(id=product_id).first()
 
-        ip = request.META.get('HTTP_X_FORWARDED_FOR', request.META.get('REMOTE_ADDR', ''))
-        if ',' in ip:
-            ip = ip.split(',')[0].strip()
-        ua = request.META.get('HTTP_USER_AGENT', '')
-        session_key = hashlib.md5(f'{ip}:{ua}'.encode()).hexdigest()[:16]
-
-        FunnelEvent.objects.create(
-            event_type=event_type,
-            session_key=session_key,
-            product=product,
-        )
+        record_funnel_event(request, event_type, product=product)
         return Response({'ok': True}, status=status.HTTP_201_CREATED)

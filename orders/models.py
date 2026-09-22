@@ -65,6 +65,7 @@ class OrderItem(models.Model):
         related_name="order_items",
     )  
     variant_size_name = models.CharField(max_length=100, blank=True, null=True)  # نسخة نصية ثابتة وقت الطلب
+    selected_color = models.CharField(max_length=100, blank=True, null=True)
     quantity = models.PositiveIntegerField(default=1)
     price_at_order_time = models.DecimalField(max_digits=10, decimal_places=2)
     shipping_price = models.DecimalField(max_digits=10, decimal_places=2, default=0)

@@ -207,7 +207,12 @@ class SyncLog(models.Model):
 
     class Meta:
         ordering = ['-finished_at']
-        indexes = [models.Index(fields=['source', 'finished_at'])]
+        indexes = [
+            models.Index(
+                fields=['source', 'finished_at'],
+                name='agent_syncl_source_fin_idx',
+            )
+        ]
 
     def __str__(self):
         return f"{self.get_source_display()} - {self.get_status_display()} @ {self.finished_at}"
@@ -233,7 +238,12 @@ class FunnelEvent(models.Model):
     created_at = models.DateTimeField(auto_now_add=True, db_index=True)
 
     class Meta:
-        indexes = [models.Index(fields=['event_type', 'created_at'])]
+        indexes = [
+            models.Index(
+                fields=['event_type', 'created_at'],
+                name='agent_funne_event_t_idx',
+            )
+        ]
 
     def __str__(self):
         return f'{self.event_type} @ {self.created_at}'
@@ -256,6 +266,12 @@ class AnalyticsAlert(models.Model):
         ('no_data', 'لا توجد بيانات'),
     )
 
+    id = models.AutoField(
+        auto_created=True,
+        primary_key=True,
+        serialize=False,
+        verbose_name='ID',
+    )
     alert_type = models.CharField(max_length=30, choices=ALERT_TYPE_CHOICES, db_index=True)
     severity = models.CharField(max_length=10, choices=SEVERITY_CHOICES, default='info')
     message = models.TextField()
@@ -272,8 +288,14 @@ class AnalyticsAlert(models.Model):
     class Meta:
         ordering = ['-created_at']
         indexes = [
-            models.Index(fields=['is_read', 'created_at']),
-            models.Index(fields=['alert_type', 'created_at']),
+            models.Index(
+                fields=['is_read', 'created_at'],
+                name='agent_analy_is_read_idx',
+            ),
+            models.Index(
+                fields=['alert_type', 'created_at'],
+                name='agent_analy_type_idx',
+            ),
         ]
 
     def __str__(self):

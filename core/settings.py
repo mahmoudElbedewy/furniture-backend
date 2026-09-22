@@ -7,6 +7,7 @@ from decouple import config
 from pathlib import Path
 import dj_database_url
 from datetime import timedelta
+from corsheaders.defaults import default_headers
 
 BASE_DIR = Path(__file__).resolve().parent.parent
 
@@ -73,6 +74,10 @@ CORS_ALLOWED_ORIGINS = [
 CORS_ALLOWED_ORIGIN_REGEXES = [
     r"^https://homestyle-store\.vercel\.app$",
     r"^https://(www\.)?myhomestyle\.store$",
+]
+CORS_ALLOW_HEADERS = [
+    *default_headers,
+    "x-furniture-visitor",
 ]
 
 TEMPLATES = [

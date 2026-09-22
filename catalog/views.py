@@ -1,6 +1,7 @@
 from rest_framework import generics, permissions
 from .serializers import (
     CategorySerializer,
+    ProductCardSerializer,
     ProductSerializer,
     ReviewSerializer,
     FavoriteSerializer,
@@ -16,7 +17,7 @@ import uuid
 
 from django.http import JsonResponse
 from django.core.exceptions import ValidationError
-from django.db.models import Case, F, IntegerField, Prefetch, Value, When
+from django.db.models import Case, F, IntegerField, Prefetch, Q, Value, When
 from .models import (
     Category,
     Product,
@@ -34,6 +35,61 @@ CATEGORY_SLUG_PRIORITY = (
     "ترابيزات-الشاشة",
     "مكتبات",
 )
+
+SEARCH_SYNONYMS = {
+    "كنبة": ("كنبة", "كنبه", "بانكيت", "سحارة"),
+    "كنبه": ("كنبة", "كنبه", "بانكيت", "سحارة"),
+    "سحارة": ("سحارة", "بانكيت"),
+    "سحاره": ("سحارة", "سحاره", "بانكيت"),
+    "خزانة": ("خزانة", "دولاب"),
+    "خزانه": ("خزانة", "خزانه", "دولاب"),
+    "دولاب": ("دولاب", "خزانة"),
+    "ترابيزة": ("ترابيزة", "ترابيزات"),
+    "ترابيزه": ("ترابيزة", "ترابيزات"),
+    "طاولة": ("طاولة", "ترابيزة", "ترابيزات"),
+    "مكتب": ("مكتب", "مكاتب"),
+}
+
+COMPLEMENTARY_CATEGORY_SLUGS = {
+    "بانكيت": ("ترابيزات-انتريه", "ترابيزات-الشاشة", "مكتبات"),
+    "دولاب": ("مكاتب", "مكتبات", "ترابيزات-الشاشة"),
+    "ترابيزات-انتريه": ("بانكيت", "مكتبات"),
+    "ترابيزات-الشاشة": ("بانكيت", "مكتبات"),
+    "مكتبات": ("ترابيزات-انتريه", "ترابيزات-الشاشة", "مكاتب"),
+    "مكاتب": ("مكتبات", "دولاب"),
+}
+
+
+def search_terms(value):
+    query = " ".join((value or "").strip().lower().split())
+    if not query:
+        return []
+
+    return [
+        tuple(dict.fromkeys(SEARCH_SYNONYMS.get(token, (token,))))
+        for token in query.split()
+    ]
+
+
+def text_match_query(term):
+    return (
+        Q(title__icontains=term)
+        | Q(description__icontains=term)
+        | Q(material__icontains=term)
+        | Q(color__icontains=term)
+        | Q(dimensions__icontains=term)
+        | Q(category__name__icontains=term)
+    )
+
+
+def product_search_query(value):
+    query = Q()
+    for alternatives in search_terms(value):
+        alternatives_query = Q()
+        for term in alternatives:
+            alternatives_query |= text_match_query(term)
+        query &= alternatives_query
+    return query
 
 
 def category_priority_expression(field_name):
@@ -90,6 +146,7 @@ def product_cards_api(request):
 class StandardResultsSetPagination(PageNumberPagination):
     page_size = 16
     page_size_query_param = "page_size"
+    max_page_size = 100
 
 
 class CategoryListView(generics.ListAPIView):
@@ -103,7 +160,7 @@ class CategoryListView(generics.ListAPIView):
 
 
 class ProductListView(generics.ListAPIView):
-    serializer_class = ProductSerializer
+    serializer_class = ProductCardSerializer
     permission_classes = [permissions.AllowAny]
     pagination_class = StandardResultsSetPagination
 
@@ -122,6 +179,7 @@ class ProductListView(generics.ListAPIView):
                 "max_price",
                 "material",
                 "color",
+                "dimensions",
                 "has_deposit",
                 "ships_nationwide",
                 "ordering",
@@ -155,23 +213,15 @@ class ProductListView(generics.ListAPIView):
         qs = (
             Product.objects.filter(is_available=True)
             .select_related("category")
-            .prefetch_related(
-                "images",
-                "variants",
-                Prefetch("reviews", queryset=Review.objects.order_by("-created_at")),
-                Prefetch(
-                    "shipping_rates",
-                    queryset=ProductShippingRate.objects.select_related(
-                        "governorate", "area"
-                    ),
-                ),
-            )
+            # Catalog cards need one image and a few labels. Details such as
+            # variants, shipping, and reviews are loaded only on the PDP.
+            .prefetch_related("images")
         )
         params = self.request.query_params
 
         search = params.get("search")
         if search:
-            qs = qs.filter(title__icontains=search)
+            qs = qs.filter(product_search_query(search))
 
         category = params.get("category")
         if category:
@@ -190,7 +240,13 @@ class ProductListView(generics.ListAPIView):
 
         color = params.get("color")
         if color:
-            qs = qs.filter(color__icontains=color)
+            qs = qs.filter(
+                Q(color__icontains=color) | Q(color_options__contains=[color])
+            )
+
+        dimensions = params.get("dimensions")
+        if dimensions:
+            qs = qs.filter(dimensions__icontains=dimensions)
 
         has_deposit = params.get("has_deposit")
         if has_deposit is not None:
@@ -222,6 +278,70 @@ class ProductListView(generics.ListAPIView):
             ).order_by("category_priority", "-created_at")
 
         return qs
+
+
+class CatalogFilterOptionsView(APIView):
+    permission_classes = [permissions.AllowAny]
+
+    def get(self, request):
+        products = Product.objects.filter(is_available=True)
+        base_colors = (
+            products.exclude(color__isnull=True)
+            .exclude(color__exact="")
+            .values_list("color", flat=True)
+            .distinct()
+        )
+        selectable_colors = set()
+        for color in base_colors:
+            selectable_colors.add(color)
+        for options in products.exclude(color_options__exact=[]).values_list(
+            "color_options", flat=True
+        ):
+            if isinstance(options, list):
+                selectable_colors.update(
+                    str(color).strip() for color in options if str(color).strip()
+                )
+        materials = (
+            products.exclude(material__isnull=True)
+            .exclude(material__exact="")
+            .values_list("material", flat=True)
+            .distinct()
+            .order_by("material")[:50]
+        )
+        return Response(
+            {
+                "colors": sorted(selectable_colors)[:50],
+                "materials": list(materials),
+            }
+        )
+
+
+class CatalogSearchSuggestionsView(APIView):
+    permission_classes = [permissions.AllowAny]
+
+    def get(self, request):
+        query = (request.query_params.get("q") or "").strip()
+        if len(query) < 2:
+            return Response({"products": [], "categories": []})
+
+        products = (
+            Product.objects.filter(is_available=True)
+            .filter(product_search_query(query))
+            .select_related("category")
+            .prefetch_related("images")
+            .order_by("-orders_count", "-views_count", "-created_at")[:6]
+        )
+        categories = (
+            Category.objects.filter(Q(name__icontains=query) | Q(slug__icontains=query))
+            .annotate(display_priority=category_priority_expression("slug"))
+            .order_by("display_priority", "name")[:4]
+        )
+        return Response(
+            {
+                "products": ProductCardSerializer(products, many=True).data,
+                "categories": CategorySerializer(categories, many=True).data,
+            }
+        )
 
 
 class ProductDetailView(generics.RetrieveAPIView):
@@ -261,6 +381,41 @@ class ProductByIdDetailView(ProductDetailView):
     """Serve a product through its stable identifier for shared links."""
 
     lookup_field = "pk"
+
+
+class ProductRecommendationsView(APIView):
+    """Keep alternative and complementary browsing below the purchase decision."""
+
+    permission_classes = [permissions.AllowAny]
+
+    def get(self, request, slug):
+        product = get_object_or_404(Product, slug=slug, is_available=True)
+        base = (
+            Product.objects.filter(is_available=True)
+            .exclude(pk=product.pk)
+            .select_related("category")
+            .prefetch_related("images")
+            .order_by("-orders_count", "-views_count", "-created_at")
+        )
+        similar = list(base.filter(category=product.category)[:10])
+        complementary_slugs = COMPLEMENTARY_CATEGORY_SLUGS.get(
+            product.category.slug,
+            (),
+        )
+        complementary = list(
+            base.filter(category__slug__in=complementary_slugs)
+            .exclude(pk__in=[item.pk for item in similar])[:6]
+        )
+        if not complementary:
+            complementary = list(
+                base.exclude(pk__in=[item.pk for item in similar])[:6]
+            )
+        return Response(
+            {
+                "similar": ProductCardSerializer(similar, many=True).data,
+                "complementary": ProductCardSerializer(complementary, many=True).data,
+            }
+        )
 
 
 

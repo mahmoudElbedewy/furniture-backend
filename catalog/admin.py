@@ -42,7 +42,7 @@ class ProductVariantInline(admin.TabularInline):
 class ProductAdmin(admin.ModelAdmin):
     list_display = ('title', 'supplier', 'category', 'base_price', 'commission_value', 'final_price', 'requires_deposit', 'deposit_amount', 'is_available', 'created_at')
     list_filter = ('is_available', 'ships_nationwide', 'requires_deposit', 'category', 'supplier')
-    search_fields = ('title', 'description', 'material', 'color', 'source_raw_text')
+    search_fields = ('title', 'description', 'material', 'color', 'dimensions', 'source_raw_text')
     prepopulated_fields = {'slug': ('title',)}
     autocomplete_fields = ('supplier', 'category')
     readonly_fields = ('final_price', 'views_count', 'orders_count', 'created_at', 'updated_at')

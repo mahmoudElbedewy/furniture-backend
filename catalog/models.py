@@ -61,9 +61,20 @@ class Product(models.Model):
     description = models.TextField(blank=True, null=True)
     material = models.CharField(max_length=100, blank=True, null=True)
     color = models.CharField(max_length=200, blank=True, null=True)
+    color_options = models.JSONField(
+        default=list,
+        blank=True,
+        help_text="ألوان قابلة للاختيار، مثال: [\"أوف وايت\", \"رمادي\"]",
+    )
     dimensions = models.CharField(
         max_length=150, blank=True, null=True
     )  # "عرض 175 × ارتفاع 31"
+    measurement_image = models.ImageField(
+        upload_to="product_measurements/",
+        blank=True,
+        null=True,
+        help_text="صورة اختيارية توضح مقاسات المنتج أو حجمه داخل مساحة حقيقية.",
+    )
 
     base_price = models.DecimalField(max_digits=10, decimal_places=2)
     commission_value = models.DecimalField(max_digits=10, decimal_places=2)
@@ -190,8 +201,14 @@ class SearchQuery(models.Model):
         db_table = "search_queries"
         ordering = ["-created_at"]
         indexes = [
-            models.Index(fields=["normalized_query", "created_at"]),
-            models.Index(fields=["has_results", "created_at"]),
+            models.Index(
+                fields=["normalized_query", "created_at"],
+                name="search_quer_normali_4a920c_idx",
+            ),
+            models.Index(
+                fields=["has_results", "created_at"],
+                name="search_quer_has_res_2fb51f_idx",
+            ),
         ]
 
     def __str__(self):
